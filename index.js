@@ -10,13 +10,15 @@ const PORT = process.env.PORT || 8000;
 app.use(cors());
 app.use(express.json());
 
-// Обработка ошибок
-app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).send('Something broke!');
-});
+// MongoDB connection
+mongoose.connect(process.env.MONGODB_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+})
+.then(() => console.log('Connected to MongoDB'))
+.catch(err => console.error('MongoDB connection error:', err));
 
-// Схема пользователя
+// User Schema
 const UserSchema = new mongoose.Schema({
     userId: String,
     limeAmount: { type: Number, default: 0 },
@@ -34,9 +36,19 @@ const UserSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', UserSchema);
 
-// Маршруты
+// Routes
 app.get('/', (req, res) => {
     res.send('Backend is running');
+});
+
+// Health check
+app.get('/health', (req, res) => {
+    res.status(200).json({ 
+        status: 'OK',
+        timestamp: new Date(),
+        port: PORT,
+        mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+    });
 });
 
 app.get('/api/users/:userId', async (req, res) => {
@@ -47,6 +59,7 @@ app.get('/api/users/:userId', async (req, res) => {
         }
         res.json(user);
     } catch (error) {
+        console.error('Error:', error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -60,63 +73,39 @@ app.put('/api/users/:userId', async (req, res) => {
         );
         res.json(user);
     } catch (error) {
+        console.error('Error:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-    res.status(200).json({
-        status: 'OK',
-        mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
-    });
+// Error handling
+app.use((err, req, res, next) => {
+    console.error(err.stack);
+    res.status(500).send('Something broke!');
 });
 
-// Создаем HTTP сервер
+// Start server
 const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server is running on port ${PORT}`);
 });
 
-// Подключение к MongoDB
-mongoose.connect(process.env.MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-    serverSelectionTimeoutMS: 5000
-}).then(() => {
-    console.log('Connected to MongoDB');
-}).catch(err => {
-    console.error('MongoDB connection error:', err);
-});
-
 // Graceful shutdown
 process.on('SIGTERM', () => {
-    console.log('SIGTERM received. Performing graceful shutdown...');
+    console.log('SIGTERM received');
     server.close(() => {
-        console.log('HTTP server closed');
         mongoose.connection.close(false, () => {
-            console.log('MongoDB connection closed');
+            console.log('Process terminated');
             process.exit(0);
         });
     });
 });
 
 process.on('SIGINT', () => {
-    console.log('SIGINT received. Performing graceful shutdown...');
+    console.log('SIGINT received');
     server.close(() => {
-        console.log('HTTP server closed');
         mongoose.connection.close(false, () => {
-            console.log('MongoDB connection closed');
+            console.log('Process terminated');
             process.exit(0);
         });
     });
-});
-
-// Обработка необработанных ошибок
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-process.on('uncaughtException', (error) => {
-    console.error('Uncaught Exception:', error);
-    process.exit(1);
 });
