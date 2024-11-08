@@ -60,7 +60,7 @@ app.get('/api/users/:userId', async (req, res) => {
         } else if (user.isActive && user.startTime) {
             const now = new Date();
             const startTime = new Date(user.startTime);
-            const farmingDuration = 5 * 60 * 60 * 1000; // 5 hours in ms
+            const farmingDuration = 5 * 60 * 60 * 1000;
             const elapsedTime = now - startTime;
             
             if (elapsedTime >= farmingDuration) {
@@ -68,12 +68,11 @@ app.get('/api/users/:userId', async (req, res) => {
                 user.startTime = null;
             } else {
                 const rewardAmount = 70;
-                const multiplier = 1 + (user.level - 1) * 0.1;
-                const earnRate = (rewardAmount / farmingDuration);
-                const earned = earnRate * elapsedTime * multiplier;
+                const earnRate = rewardAmount / farmingDuration;
+                const earned = earnRate * elapsedTime;
                 
                 if (earned > 0) {
-                    user.limeAmount = earned;
+                    user.limeAmount += earned;
                 }
             }
             
@@ -106,12 +105,11 @@ app.put('/api/users/:userId', async (req, res) => {
                 updateData.startTime = null;
             } else {
                 const rewardAmount = 70;
-                const multiplier = 1 + (updateData.level - 1) * 0.1;
-                const earnRate = (rewardAmount / farmingDuration);
-                const earned = earnRate * elapsedTime * multiplier;
+                const earnRate = rewardAmount / farmingDuration;
+                const earned = earnRate * elapsedTime;
                 
                 if (earned > 0) {
-                    updateData.limeAmount = earned;
+                    updateData.limeAmount += earned;
                 }
             }
         }
