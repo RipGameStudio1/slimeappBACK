@@ -58,26 +58,6 @@ app.get('/api/users/:userId', async (req, res) => {
                 lastUpdate: new Date(),
                 startTime: null
             });
-        } else if (user.isActive && user.startTime) {
-            const now = new Date();
-            const startTime = new Date(user.startTime);
-            const farmingDuration = 5 * 60 * 60 * 1000;
-            const elapsedTime = now - startTime;
-            
-            if (elapsedTime >= farmingDuration) {
-                user.isActive = false;
-                user.startTime = null;
-            } else {
-                const rewardAmount = 70;
-                const earnRate = rewardAmount / farmingDuration;
-                const earned = earnRate * elapsedTime;
-                
-                const currentSessionEarnings = earned;
-                user.limeAmount = user.limeAmount + currentSessionEarnings;
-            }
-            
-            user.lastUpdate = now;
-            await user.save();
         }
         
         res.json(user);
@@ -89,28 +69,10 @@ app.get('/api/users/:userId', async (req, res) => {
 
 app.put('/api/users/:userId', async (req, res) => {
     try {
-        const user = await User.findOne({ userId: req.params.userId });
-        
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
         const updateData = {
             ...req.body,
             lastUpdate: new Date()
         };
-        
-        if (updateData.isActive && updateData.startTime) {
-            const now = new Date();
-            const startTime = new Date(updateData.startTime);
-            const farmingDuration = 5 * 60 * 60 * 1000;
-            const elapsedTime = now - startTime;
-            
-            if (elapsedTime >= farmingDuration) {
-                updateData.isActive = false;
-                updateData.startTime = null;
-            }
-        }
         
         const updatedUser = await User.findOneAndUpdate(
             { userId: req.params.userId },
