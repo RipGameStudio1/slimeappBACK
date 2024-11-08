@@ -20,13 +20,14 @@ mongoose.connect(process.env.MONGODB_URI, {
 
 // User Schema
 const UserSchema = new mongoose.Schema({
-    userId: String,
+    userId: { type: String, required: true, unique: true },
     limeAmount: { type: Number, default: 0 },
     farmingCount: { type: Number, default: 0 },
     isActive: { type: Boolean, default: false },
     startTime: { type: Date, default: null },
     level: { type: Number, default: 1 },
     xp: { type: Number, default: 0 },
+    lastUpdate: { type: Date, default: Date.now },
     achievements: {
         firstFarm: { type: Boolean, default: false },
         speedDemon: { type: Boolean, default: false },
@@ -51,12 +52,43 @@ app.get('/health', (req, res) => {
     });
 });
 
+// Get user data
 app.get('/api/users/:userId', async (req, res) => {
     try {
         let user = await User.findOne({ userId: req.params.userId });
+        
         if (!user) {
-            user = await User.create({ userId: req.params.userId });
+            user = await User.create({ 
+                userId: req.params.userId,
+                lastUpdate: new Date()
+            });
+        } else {
+            // Проверяем и обновляем офлайн-прогресс
+            if (user.isActive) {
+                const now = new Date();
+                const offlineTime = now - user.lastUpdate;
+                const farmingDuration = 5 * 60 * 60 * 1000; // 5 hours
+                
+                if (offlineTime > 0) {
+                    const rewardAmount = 70;
+                    const multiplier = 1 + (user.level - 1) * 0.1;
+                    const maxOfflineTime = Math.min(offlineTime, farmingDuration);
+                    const earned = (rewardAmount / farmingDuration) * maxOfflineTime * multiplier;
+                    
+                    user.limeAmount += earned;
+                    
+                    // Если прошло больше времени чем длительность фарминга
+                    if (offlineTime >= farmingDuration) {
+                        user.isActive = false;
+                        user.startTime = null;
+                    }
+                    
+                    user.lastUpdate = now;
+                    await user.save();
+                }
+            }
         }
+        
         res.json(user);
     } catch (error) {
         console.error('Error:', error);
@@ -64,14 +96,56 @@ app.get('/api/users/:userId', async (req, res) => {
     }
 });
 
+// Update user data
 app.put('/api/users/:userId', async (req, res) => {
     try {
+        const updateData = {
+            ...req.body,
+            lastUpdate: new Date()
+        };
+        
         const user = await User.findOneAndUpdate(
             { userId: req.params.userId },
-            req.body,
+            updateData,
             { new: true, upsert: true }
         );
+        
         res.json(user);
+    } catch (error) {
+        console.error('Error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Calculate offline progress
+app.post('/api/users/:userId/offline-progress', async (req, res) => {
+    try {
+        const user = await User.findOne({ userId: req.params.userId });
+        if (!user || !user.isActive) return res.json({ earned: 0 });
+
+        const now = new Date();
+        const offlineTime = now - user.lastUpdate;
+        const farmingDuration = 5 * 60 * 60 * 1000;
+        
+        if (offlineTime > 0) {
+            const rewardAmount = 70;
+            const multiplier = 1 + (user.level - 1) * 0.1;
+            const maxOfflineTime = Math.min(offlineTime, farmingDuration);
+            const earned = (rewardAmount / farmingDuration) * maxOfflineTime * multiplier;
+            
+            user.limeAmount += earned;
+            user.lastUpdate = now;
+            
+            if (offlineTime >= farmingDuration) {
+                user.isActive = false;
+                user.startTime = null;
+            }
+            
+            await user.save();
+            res.json({ earned });
+        } else {
+            res.json({ earned: 0 });
+        }
     } catch (error) {
         console.error('Error:', error);
         res.status(500).json({ error: error.message });
