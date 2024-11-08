@@ -1,0 +1,20 @@
+name: Create package-lock.json
+
+on: workflow_dispatch
+
+jobs:
+  create-lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v2
+        with:
+          node-version: '16'
+      - run: npm install
+      - name: Commit package-lock.json
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add package-lock.json
+          git commit -m "Add package-lock.json"
+          git push
