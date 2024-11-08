@@ -60,6 +60,7 @@ app.get('/api/users/:userId', async (req, res) => {
             });
         }
         
+        // Просто возвращаем данные без дополнительных вычислений
         res.json(user);
     } catch (error) {
         console.error('Error:', error);
