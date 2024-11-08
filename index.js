@@ -60,7 +60,6 @@ app.get('/api/users/:userId', async (req, res) => {
             });
         }
         
-        // Просто возвращаем данные без дополнительных вычислений
         res.json(user);
     } catch (error) {
         console.error('Error:', error);
@@ -84,6 +83,36 @@ app.put('/api/users/:userId', async (req, res) => {
         res.json(updatedUser);
     } catch (error) {
         console.error('Error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Новый эндпоинт для завершения фарминга
+app.post('/api/users/:userId/complete-farming', async (req, res) => {
+    try {
+        const { limeAmount, farmingCount } = req.body;
+        
+        const updatedUser = await User.findOneAndUpdate(
+            { userId: req.params.userId },
+            {
+                $set: {
+                    limeAmount,
+                    farmingCount,
+                    isActive: false,
+                    startTime: null,
+                    lastUpdate: new Date()
+                }
+            },
+            { new: true }
+        );
+
+        if (!updatedUser) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        res.json(updatedUser);
+    } catch (error) {
+        console.error('Error completing farming:', error);
         res.status(500).json({ error: error.message });
     }
 });
