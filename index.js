@@ -54,6 +54,7 @@ app.get('/api/users/:userId', async (req, res) => {
         if (!user) {
             user = await User.create({ 
                 userId: req.params.userId,
+                limeAmount: 0,
                 lastUpdate: new Date(),
                 startTime: null
             });
@@ -71,9 +72,8 @@ app.get('/api/users/:userId', async (req, res) => {
                 const earnRate = rewardAmount / farmingDuration;
                 const earned = earnRate * elapsedTime;
                 
-                if (earned > 0) {
-                    user.limeAmount += earned;
-                }
+                const currentSessionEarnings = earned;
+                user.limeAmount = user.limeAmount + currentSessionEarnings;
             }
             
             user.lastUpdate = now;
@@ -89,6 +89,12 @@ app.get('/api/users/:userId', async (req, res) => {
 
 app.put('/api/users/:userId', async (req, res) => {
     try {
+        const user = await User.findOne({ userId: req.params.userId });
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
         const updateData = {
             ...req.body,
             lastUpdate: new Date()
@@ -103,24 +109,16 @@ app.put('/api/users/:userId', async (req, res) => {
             if (elapsedTime >= farmingDuration) {
                 updateData.isActive = false;
                 updateData.startTime = null;
-            } else {
-                const rewardAmount = 70;
-                const earnRate = rewardAmount / farmingDuration;
-                const earned = earnRate * elapsedTime;
-                
-                if (earned > 0) {
-                    updateData.limeAmount += earned;
-                }
             }
         }
         
-        const user = await User.findOneAndUpdate(
+        const updatedUser = await User.findOneAndUpdate(
             { userId: req.params.userId },
             updateData,
-            { new: true, upsert: true }
+            { new: true }
         );
         
-        res.json(user);
+        res.json(updatedUser);
     } catch (error) {
         console.error('Error:', error);
         res.status(500).json({ error: error.message });
