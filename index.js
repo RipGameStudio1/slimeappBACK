@@ -25,9 +25,6 @@ const UserSchema = new mongoose.Schema({
     level: { type: Number, default: 1 },
     xp: { type: Number, default: 0 },
     lastUpdate: { type: Date, default: Date.now },
-    pendingRewards: { type: Number, default: 0 },
-    referrer: { type: String, default: null },
-    referrals: [{ type: String }],
     achievements: {
         firstFarm: { type: Boolean, default: false },
         speedDemon: { type: Boolean, default: false },
@@ -90,104 +87,32 @@ app.put('/api/users/:userId', async (req, res) => {
     }
 });
 
+// Новый эндпоинт для завершения фарминга
 app.post('/api/users/:userId/complete-farming', async (req, res) => {
     try {
         const { limeAmount, farmingCount } = req.body;
         
-        const user = await User.findOne({ userId: req.params.userId });
-        if (!user) {
+        const updatedUser = await User.findOneAndUpdate(
+            { userId: req.params.userId },
+            {
+                $set: {
+                    limeAmount,
+                    farmingCount,
+                    isActive: false,
+                    startTime: null,
+                    lastUpdate: new Date()
+                }
+            },
+            { new: true }
+        );
+
+        if (!updatedUser) {
             return res.status(404).json({ error: 'User not found' });
         }
 
-        // Если есть реферер, начисляем ему бонус
-        if (user.referrer) {
-            const referrer = await User.findOne({ userId: user.referrer });
-            if (referrer) {
-                const bonus = (limeAmount - user.limeAmount) * 0.1; // 10% от заработка
-                referrer.pendingRewards += bonus;
-                await referrer.save();
-            }
-        }
-
-        user.limeAmount = limeAmount;
-        user.farmingCount = farmingCount;
-        user.isActive = false;
-        user.startTime = null;
-        user.lastUpdate = new Date();
-        await user.save();
-
-        res.json(user);
+        res.json(updatedUser);
     } catch (error) {
         console.error('Error completing farming:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.get('/api/users/:userId/referrals', async (req, res) => {
-    try {
-        const user = await User.findOne({ userId: req.params.userId });
-        if (!user) return res.status(404).json({ error: 'User not found' });
-        
-        const referrals = await User.find({ 
-            userId: { $in: user.referrals }
-        }, 'userId limeAmount');
-        
-        res.json(referrals);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.post('/api/users/:userId/referral', async (req, res) => {
-    try {
-        const { referralCode } = req.body;
-        const referrerId = referralCode.replace('ref', '');
-        
-        if (referrerId === req.params.userId) {
-            return res.status(400).json({ error: 'Cannot refer yourself' });
-        }
-        
-        const user = await User.findOne({ userId: req.params.userId });
-        if (user.referrer) {
-            return res.status(400).json({ error: 'Already has referrer' });
-        }
-        
-        const referrer = await User.findOne({ userId: referrerId });
-        if (!referrer) {
-            return res.status(404).json({ error: 'Referrer not found' });
-        }
-        
-        user.referrer = referrerId;
-        referrer.referrals.push(req.params.userId);
-        
-        await user.save();
-        await referrer.save();
-        
-        res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.post('/api/users/:userId/collect-rewards', async (req, res) => {
-    try {
-        const user = await User.findOne({ userId: req.params.userId });
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        const collectedAmount = user.pendingRewards;
-        user.limeAmount += collectedAmount;
-        user.pendingRewards = 0;
-        await user.save();
-
-        res.json({ 
-            success: true, 
-            collectedAmount,
-            newBalance: user.limeAmount 
-        });
-    } catch (error) {
-        console.error('Error collecting rewards:', error);
         res.status(500).json({ error: error.message });
     }
 });
