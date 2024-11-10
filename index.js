@@ -29,10 +29,37 @@ const UserSchema = new mongoose.Schema({
         firstFarm: { type: Boolean, default: false },
         speedDemon: { type: Boolean, default: false },
         millionaire: { type: Boolean, default: false }
-    }
+    },
+    referralCode: { type: String, unique: true },
+    referrer: { type: String, default: null },
+    referrals: [{
+        userId: String,
+        joinDate: Date,
+        earnings: { type: Number, default: 0 }
+    }],
+    totalReferralEarnings: { type: Number, default: 0 }
 });
 
 const User = mongoose.model('User', UserSchema);
+
+// Генерация уникального реферального кода
+async function generateReferralCode() {
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let code;
+    let isUnique = false;
+
+    while (!isUnique) {
+        code = '';
+        for (let i = 0; i < 8; i++) {
+            code += characters.charAt(Math.floor(Math.random() * characters.length));
+        }
+        const existingUser = await User.findOne({ referralCode: code });
+        if (!existingUser) {
+            isUnique = true;
+        }
+    }
+    return code;
+}
 
 app.get('/', (req, res) => {
     res.send('Backend is running');
@@ -52,11 +79,13 @@ app.get('/api/users/:userId', async (req, res) => {
         let user = await User.findOne({ userId: req.params.userId });
         
         if (!user) {
+            const referralCode = await generateReferralCode();
             user = await User.create({ 
                 userId: req.params.userId,
                 limeAmount: 0,
                 lastUpdate: new Date(),
-                startTime: null
+                startTime: null,
+                referralCode
             });
         }
         
@@ -87,10 +116,29 @@ app.put('/api/users/:userId', async (req, res) => {
     }
 });
 
-// Новый эндпоинт для завершения фарминга
 app.post('/api/users/:userId/complete-farming', async (req, res) => {
     try {
         const { limeAmount, farmingCount } = req.body;
+        const user = await User.findOne({ userId: req.params.userId });
+        
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Вычисляем заработок для реферера (10%)
+        if (user.referrer) {
+            const referrer = await User.findOne({ userId: user.referrer });
+            if (referrer) {
+                const referralEarnings = (limeAmount - user.limeAmount) * 0.1;
+                const referralIndex = referrer.referrals.findIndex(r => r.userId === user.userId);
+                
+                if (referralIndex !== -1) {
+                    referrer.referrals[referralIndex].earnings += referralEarnings;
+                }
+                referrer.totalReferralEarnings += referralEarnings;
+                await referrer.save();
+            }
+        }
         
         const updatedUser = await User.findOneAndUpdate(
             { userId: req.params.userId },
@@ -106,13 +154,59 @@ app.post('/api/users/:userId/complete-farming', async (req, res) => {
             { new: true }
         );
 
-        if (!updatedUser) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
         res.json(updatedUser);
     } catch (error) {
         console.error('Error completing farming:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/users/:userId/referrals', async (req, res) => {
+    try {
+        const user = await User.findOne({ userId: req.params.userId });
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        res.json({
+            referralCode: user.referralCode,
+            referralCount: user.referrals.length,
+            totalEarnings: user.totalReferralEarnings,
+            referrals: user.referrals
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/users/referral', async (req, res) => {
+    try {
+        const { referralCode, userId } = req.body;
+        
+        const referrer = await User.findOne({ referralCode });
+        if (!referrer) {
+            return res.status(404).json({ error: 'Invalid referral code' });
+        }
+        
+        const user = await User.findOne({ userId });
+        if (user.referrer) {
+            return res.status(400).json({ error: 'User already has a referrer' });
+        }
+        
+        // Добавляем реферала
+        referrer.referrals.push({
+            userId: userId,
+            joinDate: new Date(),
+            earnings: 0
+        });
+        await referrer.save();
+        
+        // Обновляем информацию о пользователе
+        user.referrer = referrer.userId;
+        await user.save();
+        
+        res.json({ success: true });
+    } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
