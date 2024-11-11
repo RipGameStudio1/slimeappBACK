@@ -65,6 +65,79 @@ app.get('/', (req, res) => {
     res.send('Backend is running');
 });
 
+// Эндпоинт для обновления существующих пользователей
+app.post('/api/update-users-schema', async (req, res) => {
+    try {
+        // Получаем всех пользователей
+        const users = await User.find({});
+        const updates = [];
+
+        for (const user of users) {
+            const updateFields = {};
+            
+            // Проверяем и добавляем отсутствующие поля
+            if (!user.referralCode) {
+                updateFields.referralCode = await generateReferralCode();
+            }
+            if (!user.referrals) {
+                updateFields.referrals = [];
+            }
+            if (user.totalReferralEarnings === undefined) {
+                updateFields.totalReferralEarnings = 0;
+            }
+            if (!user.achievements) {
+                updateFields.achievements = {
+                    firstFarm: false,
+                    speedDemon: false,
+                    millionaire: false
+                };
+            }
+            if (user.level === undefined) {
+                updateFields.level = 1;
+            }
+            if (user.xp === undefined) {
+                updateFields.xp = 0;
+            }
+            if (user.farmingCount === undefined) {
+                updateFields.farmingCount = 0;
+            }
+
+            // Если есть что обновлять
+            if (Object.keys(updateFields).length > 0) {
+                updates.push({
+                    updateOne: {
+                        filter: { _id: user._id },
+                        update: { $set: updateFields }
+                    }
+                });
+            }
+        }
+
+        // Если есть обновления, выполняем их
+        if (updates.length > 0) {
+            await User.bulkWrite(updates);
+            res.json({ 
+                success: true, 
+                message: `Updated ${updates.length} users`,
+                updatedUsers: updates.length
+            });
+        } else {
+            res.json({ 
+                success: true, 
+                message: 'No updates needed',
+                updatedUsers: 0
+            });
+        }
+
+    } catch (error) {
+        console.error('Error updating users:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
 app.get('/health', (req, res) => {
     res.status(200).json({ 
         status: 'OK',
