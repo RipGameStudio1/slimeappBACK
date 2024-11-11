@@ -168,6 +168,14 @@ app.get('/api/users/:userId/referrals', async (req, res) => {
             return res.status(404).json({ error: 'User not found' });
         }
         
+        // Добавим логирование
+        console.log('Referral data:', {
+            referralCode: user.referralCode,
+            referralCount: user.referrals.length,
+            totalEarnings: user.totalReferralEarnings,
+            referrals: user.referrals
+        });
+        
         res.json({
             referralCode: user.referralCode,
             referralCount: user.referrals.length,
@@ -175,6 +183,7 @@ app.get('/api/users/:userId/referrals', async (req, res) => {
             referrals: user.referrals
         });
     } catch (error) {
+        console.error('Error in referrals endpoint:', error);
         res.status(500).json({ error: error.message });
     }
 });
