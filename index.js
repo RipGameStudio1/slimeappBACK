@@ -161,6 +161,138 @@ app.post('/api/users/:userId/complete-farming', async (req, res) => {
     }
 });
 
+// Статистика для админ-панели
+app.get('/api/admin/stats', async (req, res) => {
+    try {
+        const userId = req.query.userId;
+        if (!isAdmin(userId)) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        const totalUsers = await User.countDocuments();
+        const last24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const activeUsers = await User.countDocuments({ lastUpdate: { $gte: last24h } });
+        const totalLime = await User.aggregate([
+            { $group: { _id: null, total: { $sum: "$limeAmount" } } }
+        ]);
+
+        res.json({
+            totalUsers,
+            activeUsers,
+            totalLime: totalLime[0]?.total || 0
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Получение логов активности
+app.get('/api/admin/activity', async (req, res) => {
+    try {
+        const userId = req.query.userId;
+        if (!isAdmin(userId)) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        const activities = await ActivityLog.find()
+            .sort({ timestamp: -1 })
+            .limit(50);
+
+        res.json(activities);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Поиск пользователя
+app.get('/api/admin/user/:searchUserId', async (req, res) => {
+    try {
+        const adminId = req.query.adminId;
+        if (!isAdmin(adminId)) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        const user = await User.findOne({ userId: req.params.searchUserId });
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        res.json(user);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Обновление пользователя
+app.put('/api/admin/user/:userId', async (req, res) => {
+    try {
+        const adminId = req.query.adminId;
+        if (!isAdmin(adminId)) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        const { limeAmount, level } = req.body;
+        const user = await User.findOneAndUpdate(
+            { userId: req.params.userId },
+            { $set: { limeAmount, level } },
+            { new: true }
+        );
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        res.json(user);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Сброс зависших фармингов
+app.post('/api/admin/reset-farming', async (req, res) => {
+    try {
+        const adminId = req.query.adminId;
+        if (!isAdmin(adminId)) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        const result = await User.updateMany(
+            { isActive: true },
+            { $set: { isActive: false, startTime: null } }
+        );
+
+        res.json({
+            success: true,
+            resetCount: result.modifiedCount
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Очистка неактивных пользователей
+app.post('/api/admin/clear-inactive', async (req, res) => {
+    try {
+        const adminId = req.query.adminId;
+        if (!isAdmin(adminId)) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const result = await User.deleteMany({
+            lastUpdate: { $lt: thirtyDaysAgo },
+            limeAmount: { $lt: 1000 } // Не удаляем пользователей с большим балансом
+        });
+
+        res.json({
+            success: true,
+            deletedCount: result.deletedCount
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.get('/api/users/:userId/referrals', async (req, res) => {
     try {
         const user = await User.findOne({ userId: req.params.userId });
