@@ -37,7 +37,10 @@ const UserSchema = new mongoose.Schema({
         joinDate: Date,
         earnings: { type: Number, default: 0 }
     }],
-    totalReferralEarnings: { type: Number, default: 0 }
+    totalReferralEarnings: { type: Number, default: 0 },
+    lastDailyReward: { type: Date, default: null },
+    dailyRewardStreak: { type: Number, default: 0 },
+    slimeNinjaAttempts: { type: Number, default: 5 }
 });
 
 const User = mongoose.model('User', UserSchema);
@@ -92,6 +95,56 @@ app.get('/api/users/:userId', async (req, res) => {
         res.json(user);
     } catch (error) {
         console.error('Error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/users/:userId/daily-reward', async (req, res) => {
+    try {
+        const user = await User.findOne({ userId: req.params.userId });
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const now = new Date();
+        const lastReward = user.lastDailyReward ? new Date(user.lastDailyReward) : null;
+        
+        // Проверяем, прошли ли сутки с последней награды
+        if (lastReward && now.getDate() === lastReward.getDate() && 
+            now.getMonth() === lastReward.getMonth() && 
+            now.getFullYear() === lastReward.getFullYear()) {
+            return res.status(400).json({ error: 'Already claimed today' });
+        }
+
+        // Проверяем, не прервалась ли серия
+        if (lastReward && (now - lastReward) > 24 * 60 * 60 * 1000) {
+            user.dailyRewardStreak = 0;
+        }
+
+        // Увеличиваем серию
+        user.dailyRewardStreak += 1;
+        if (user.dailyRewardStreak > 7) user.dailyRewardStreak = 7;
+
+        // Вычисляем награду
+        const rewardDay = user.dailyRewardStreak;
+        const limeReward = rewardDay * 10;
+        const attemptsReward = rewardDay;
+
+        // Применяем награду
+        user.limeAmount += limeReward;
+        user.slimeNinjaAttempts += attemptsReward;
+        user.lastDailyReward = now;
+
+        await user.save();
+
+        res.json({
+            streak: user.dailyRewardStreak,
+            limeReward,
+            attemptsReward,
+            totalLime: user.limeAmount,
+            totalAttempts: user.slimeNinjaAttempts
+        });
+    } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
