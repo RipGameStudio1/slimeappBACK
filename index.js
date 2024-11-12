@@ -65,6 +65,31 @@ async function generateReferralCode() {
     return code;
 }
 
+app.post('/api/users/:userId/update-attempts', async (req, res) => {
+    try {
+        const { attempts } = req.body;
+        
+        if (typeof attempts !== 'number' || attempts < 0) {
+            return res.status(400).json({ error: 'Invalid attempts value' });
+        }
+
+        const user = await User.findOneAndUpdate(
+            { userId: req.params.userId },
+            { $set: { slimeNinjaAttempts: attempts } },
+            { new: true }
+        );
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        res.json({ attempts: user.slimeNinjaAttempts });
+    } catch (error) {
+        console.error('Error updating attempts:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.get('/', (req, res) => {
     res.send('Backend is running');
 });
