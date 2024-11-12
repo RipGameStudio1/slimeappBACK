@@ -110,6 +110,7 @@ app.post('/api/users/:userId/daily-reward', async (req, res) => {
         const now = new Date();
         const lastReward = user.lastDailyReward ? new Date(user.lastDailyReward) : null;
         
+        // Проверяем, прошли ли сутки с последней награды
         if (lastReward && now.getDate() === lastReward.getDate() && 
             now.getMonth() === lastReward.getMonth() && 
             now.getFullYear() === lastReward.getFullYear()) {
@@ -117,21 +118,22 @@ app.post('/api/users/:userId/daily-reward', async (req, res) => {
         }
 
         // Проверяем, не прервалась ли серия
-        if (lastReward && (now - lastReward) > 24 * 60 * 60 * 1000) {
-            user.dailyRewardStreak = 0;
-            user.totalDailyStreak = 0;
+        if (lastReward) {
+            const daysDiff = Math.floor((now - lastReward) / (24 * 60 * 60 * 1000));
+            if (daysDiff > 1) {
+                user.dailyRewardStreak = 0;
+            }
         }
 
-        // Увеличиваем оба счётчика
+        // Увеличиваем серию
         user.dailyRewardStreak += 1;
-        user.totalDailyStreak += 1;
-        
-        // Ограничиваем только счётчик для наград
+
+        // Вычисляем награду (не сбрасываем после 7 дней)
         const rewardDay = Math.min(user.dailyRewardStreak, 7);
-        
         const limeReward = rewardDay * 10;
         const attemptsReward = rewardDay;
 
+        // Применяем награду
         user.limeAmount += limeReward;
         user.slimeNinjaAttempts += attemptsReward;
         user.lastDailyReward = now;
@@ -139,8 +141,8 @@ app.post('/api/users/:userId/daily-reward', async (req, res) => {
         await user.save();
 
         res.json({
-            streak: user.totalDailyStreak, // Отправляем реальное количество дней
-            rewardTier: rewardDay, // Отправляем уровень награды (1-7)
+            streak: user.dailyRewardStreak,
+            rewardDay: rewardDay,
             limeReward,
             attemptsReward,
             totalLime: user.limeAmount,
