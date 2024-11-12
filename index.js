@@ -69,8 +69,12 @@ app.post('/api/users/:userId/update-attempts', async (req, res) => {
     try {
         const { attempts } = req.body;
         
+        // Строгая проверка значения
         if (typeof attempts !== 'number' || attempts < 0) {
-            return res.status(400).json({ error: 'Invalid attempts value' });
+            return res.status(400).json({ 
+                error: 'Invalid attempts value',
+                currentAttempts: (await User.findOne({ userId: req.params.userId })).slimeNinjaAttempts
+            });
         }
 
         const user = await User.findOneAndUpdate(
