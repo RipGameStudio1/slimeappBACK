@@ -169,6 +169,19 @@ app.put('/api/users/:userId', async (req, res) => {
     }
 });
 
+app.put('/api/users/:userId/attempts', async (req, res) => {
+    try {
+        const { attempts } = req.body;
+        const user = await User.findOneAndUpdate(
+            { userId: req.params.userId },
+            { $set: { slimeNinjaAttempts: attempts } },
+            { new: true }
+        );
+        res.json({ attempts: user.slimeNinjaAttempts });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 app.post('/api/users/:userId/complete-farming', async (req, res) => {
     try {
         const { limeAmount, farmingCount } = req.body;
