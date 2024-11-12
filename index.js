@@ -40,7 +40,8 @@ const UserSchema = new mongoose.Schema({
     totalReferralEarnings: { type: Number, default: 0 },
     lastDailyReward: { type: Date, default: null },
     dailyRewardStreak: { type: Number, default: 0 },
-    slimeNinjaAttempts: { type: Number, default: 5 }
+    slimeNinjaAttempts: { type: Number, default: 5 },
+    totalDailyStreak: { type: Number, default: 0 }
 });
 
 const User = mongoose.model('User', UserSchema);
@@ -109,7 +110,6 @@ app.post('/api/users/:userId/daily-reward', async (req, res) => {
         const now = new Date();
         const lastReward = user.lastDailyReward ? new Date(user.lastDailyReward) : null;
         
-        // Проверяем, прошли ли сутки с последней награды
         if (lastReward && now.getDate() === lastReward.getDate() && 
             now.getMonth() === lastReward.getMonth() && 
             now.getFullYear() === lastReward.getFullYear()) {
@@ -119,18 +119,19 @@ app.post('/api/users/:userId/daily-reward', async (req, res) => {
         // Проверяем, не прервалась ли серия
         if (lastReward && (now - lastReward) > 24 * 60 * 60 * 1000) {
             user.dailyRewardStreak = 0;
+            user.totalDailyStreak = 0;
         }
 
-        // Увеличиваем серию
+        // Увеличиваем оба счётчика
         user.dailyRewardStreak += 1;
-        if (user.dailyRewardStreak > 7) user.dailyRewardStreak = 7;
-
-        // Вычисляем награду
-        const rewardDay = user.dailyRewardStreak;
+        user.totalDailyStreak += 1;
+        
+        // Ограничиваем только счётчик для наград
+        const rewardDay = Math.min(user.dailyRewardStreak, 7);
+        
         const limeReward = rewardDay * 10;
         const attemptsReward = rewardDay;
 
-        // Применяем награду
         user.limeAmount += limeReward;
         user.slimeNinjaAttempts += attemptsReward;
         user.lastDailyReward = now;
@@ -138,7 +139,8 @@ app.post('/api/users/:userId/daily-reward', async (req, res) => {
         await user.save();
 
         res.json({
-            streak: user.dailyRewardStreak,
+            streak: user.totalDailyStreak, // Отправляем реальное количество дней
+            rewardTier: rewardDay, // Отправляем уровень награды (1-7)
             limeReward,
             attemptsReward,
             totalLime: user.limeAmount,
