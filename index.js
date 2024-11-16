@@ -120,32 +120,38 @@ app.get('/api/users/:userId', async (req, res) => {
             });
         }
 
-        // Если есть активный фарминг, рассчитываем текущий баланс
+        // Если есть активный фарминг
         if (user.isActive && user.startTime) {
             const now = Date.now();
             const startTime = new Date(user.startTime).getTime();
             const elapsedTime = now - startTime;
             const farmingDuration = 30 * 1000; // 30 секунд
-        
+            const baseAmount = user.limeAmount; // Базовый баланс на момент начала фарминга
+            const totalReward = 70; // Общая награда за фарминг
+
             if (elapsedTime >= farmingDuration) {
-                // Если фарминг должен был закончиться, завершаем его
-                const earnRate = 70 / farmingDuration;
-                const totalEarned = earnRate * farmingDuration;
-                
-                user.limeAmount += totalEarned;
-                user.xp += totalEarned * 0.1; // Начисляем опыт
+                // Завершаем фарминг
+                user.limeAmount = baseAmount + totalReward;
+                user.xp += totalReward * 0.1;
                 user.isActive = false;
                 user.startTime = null;
                 await user.save();
             } else {
-                // Если фарминг активен, рассчитываем текущий прогресс
-                const earnRate = 70 / farmingDuration;
-                const currentEarned = earnRate * elapsedTime;
-                user.currentProgress = {
-                    earned: user.limeAmount + currentEarned, // Текущий баланс + заработанное
-                    currentXp: user.xp + (currentEarned * 0.1), // Текущий опыт + заработанный
-                    progress: (elapsedTime / farmingDuration) * 100
-                };
+                // Вычисляем текущий прогресс
+                const progress = (elapsedTime / farmingDuration) * 100;
+                const currentEarned = (totalReward * elapsedTime) / farmingDuration;
+                const currentXpEarned = currentEarned * 0.1;
+
+                // Отправляем текущий прогресс
+                return res.json({
+                    ...user.toObject(),
+                    currentProgress: {
+                        progress,
+                        currentLimeAmount: baseAmount + currentEarned,
+                        currentXp: user.xp + currentXpEarned,
+                        remainingTime: Math.ceil((farmingDuration - elapsedTime) / 1000)
+                    }
+                });
             }
         }
         
