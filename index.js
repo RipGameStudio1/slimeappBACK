@@ -116,15 +116,61 @@ app.get('/api/users/:userId', async (req, res) => {
             user = await User.create({ 
                 userId: req.params.userId,
                 limeAmount: 0,
-                lastUpdate: new Date(),
-                startTime: null,
                 referralCode
             });
+        }
+
+        // Если есть активный фарминг, рассчитываем текущий баланс
+        if (user.isActive && user.startTime) {
+            const now = Date.now();
+            const startTime = new Date(user.startTime).getTime();
+            const elapsedTime = now - startTime;
+            const farmingDuration = 30 * 1000; // 30 секунд
+
+            if (elapsedTime >= farmingDuration) {
+                // Если фарминг должен был закончиться, завершаем его
+                const earnRate = 70 / farmingDuration; // 70 - награда за фарминг
+                const totalEarned = earnRate * farmingDuration;
+                
+                user.limeAmount += totalEarned;
+                user.isActive = false;
+                user.startTime = null;
+                await user.save();
+            } else {
+                // Если фарминг активен, рассчитываем текущий прогресс
+                const earnRate = 70 / farmingDuration;
+                const currentEarned = earnRate * elapsedTime;
+                user.currentProgress = {
+                    earned: currentEarned,
+                    progress: (elapsedTime / farmingDuration) * 100
+                };
+            }
         }
         
         res.json(user);
     } catch (error) {
         console.error('Error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/users/:userId/start-farming', async (req, res) => {
+    try {
+        const user = await User.findOne({ userId: req.params.userId });
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        if (user.isActive) {
+            return res.status(400).json({ error: 'Farming already in progress' });
+        }
+
+        user.isActive = true;
+        user.startTime = new Date();
+        await user.save();
+
+        res.json(user);
+    } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
