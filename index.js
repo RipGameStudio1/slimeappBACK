@@ -139,30 +139,25 @@ app.post('/api/users/:userId/daily-reward', async (req, res) => {
         const now = new Date();
         const lastReward = user.lastDailyReward ? new Date(user.lastDailyReward) : null;
         
-        // Проверяем, прошли ли сутки с последней награды
-        if (lastReward && now.getDate() === lastReward.getDate() && 
-            now.getMonth() === lastReward.getMonth() && 
-            now.getFullYear() === lastReward.getFullYear()) {
-            return res.status(400).json({ error: 'Already claimed today' });
-        }
-
-        // Проверяем, не прервалась ли серия
-        if (lastReward) {
-            const daysDiff = Math.floor((now - lastReward) / (24 * 60 * 60 * 1000));
-            if (daysDiff > 1) {
-                user.dailyRewardStreak = 0;
+        // Если это первая награда пользователя
+        if (!lastReward) {
+            user.dailyRewardStreak = 1;
+        } else {
+            const lastRewardDate = new Date(lastReward.setHours(0, 0, 0, 0));
+            const todayDate = new Date(now.setHours(0, 0, 0, 0));
+            const daysDiff = Math.floor((todayDate - lastRewardDate) / (24 * 60 * 60 * 1000));
+            if (daysDiff === 1) {
+                user.dailyRewardStreak += 1;
+            } else if (daysDiff === 0) {
+                return res.status(400).json({ error: 'Already claimed today' });
+            } else {
+                user.dailyRewardStreak = 1;
             }
         }
-
-        // Увеличиваем серию
-        user.dailyRewardStreak += 1;
-
-        // Вычисляем награду (не сбрасываем после 7 дней)
         const rewardDay = Math.min(user.dailyRewardStreak, 7);
         const limeReward = rewardDay * 10;
         const attemptsReward = rewardDay;
 
-        // Применяем награду
         user.limeAmount += limeReward;
         user.slimeNinjaAttempts += attemptsReward;
         user.lastDailyReward = now;
@@ -178,6 +173,7 @@ app.post('/api/users/:userId/daily-reward', async (req, res) => {
             totalAttempts: user.slimeNinjaAttempts
         });
     } catch (error) {
+        console.error('Error in daily reward:', error);
         res.status(500).json({ error: error.message });
     }
 });
