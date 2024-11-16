@@ -126,13 +126,14 @@ app.get('/api/users/:userId', async (req, res) => {
             const startTime = new Date(user.startTime).getTime();
             const elapsedTime = now - startTime;
             const farmingDuration = 30 * 1000; // 30 секунд
-
+        
             if (elapsedTime >= farmingDuration) {
                 // Если фарминг должен был закончиться, завершаем его
-                const earnRate = 70 / farmingDuration; // 70 - награда за фарминг
+                const earnRate = 70 / farmingDuration;
                 const totalEarned = earnRate * farmingDuration;
                 
                 user.limeAmount += totalEarned;
+                user.xp += totalEarned * 0.1; // Начисляем опыт
                 user.isActive = false;
                 user.startTime = null;
                 await user.save();
@@ -141,7 +142,8 @@ app.get('/api/users/:userId', async (req, res) => {
                 const earnRate = 70 / farmingDuration;
                 const currentEarned = earnRate * elapsedTime;
                 user.currentProgress = {
-                    earned: currentEarned,
+                    earned: user.limeAmount + currentEarned, // Текущий баланс + заработанное
+                    currentXp: user.xp + (currentEarned * 0.1), // Текущий опыт + заработанный
                     progress: (elapsedTime / farmingDuration) * 100
                 };
             }
