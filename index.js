@@ -234,34 +234,32 @@ app.post('/api/users/:userId/daily-reward', async (req, res) => {
 
 app.put('/api/users/:userId', async (req, res) => {
     try {
+        console.log('Updating user data:', req.body); // Для отладки
+
         const updateData = {
             ...req.body,
             lastUpdate: new Date()
         };
-        
-        // Добавляем проверку версии данных
-        const user = await User.findOne({ userId: req.params.userId });
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
+
+        // Если передаются достижения, убедимся что они сохраняются правильно
+        if (updateData.achievements) {
+            console.log('Updating achievements:', updateData.achievements); // Для отладки
         }
-        
-        // Проверяем, не было ли изменений данных другими запросами
-        if (updateData.isActive && user.isActive && user.startTime !== updateData.startTime) {
-            return res.status(409).json({ 
-                error: 'Data conflict',
-                currentData: user
-            });
-        }
-        
+
         const updatedUser = await User.findOneAndUpdate(
             { userId: req.params.userId },
-            updateData,
+            { $set: updateData },
             { new: true }
         );
-        
+
+        if (!updatedUser) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        console.log('Updated user achievements:', updatedUser.achievements); // Для отладки
         res.json(updatedUser);
     } catch (error) {
-        console.error('Error:', error);
+        console.error('Error updating user:', error);
         res.status(500).json({ error: error.message });
     }
 });
