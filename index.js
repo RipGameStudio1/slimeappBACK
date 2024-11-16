@@ -185,6 +185,20 @@ app.put('/api/users/:userId', async (req, res) => {
             lastUpdate: new Date()
         };
         
+        // Добавляем проверку версии данных
+        const user = await User.findOne({ userId: req.params.userId });
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        // Проверяем, не было ли изменений данных другими запросами
+        if (updateData.isActive && user.isActive && user.startTime !== updateData.startTime) {
+            return res.status(409).json({ 
+                error: 'Data conflict',
+                currentData: user
+            });
+        }
+        
         const updatedUser = await User.findOneAndUpdate(
             { userId: req.params.userId },
             updateData,
