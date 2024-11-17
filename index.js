@@ -118,6 +118,36 @@ app.get('/api/users/:userId', async (req, res) => {
                 limeAmount: 0,
                 referralCode
             });
+        } else {
+            // Проверка наличия всех необходимых полей
+            const defaultFields = {
+                limeAmount: 0,
+                farmingCount: 0,
+                isActive: false,
+                startTime: null,
+                level: 1,
+                xp: 0,
+                lastUpdate: new Date(),
+                achievements: {
+                    firstFarm: false,
+                    speedDemon: false,
+                    millionaire: false
+                },
+                referrer: null,
+                referrals: [],
+                totalReferralEarnings: 0,
+                lastDailyReward: null,
+                dailyRewardStreak: 0,
+                slimeNinjaAttempts: 5,
+                totalDailyStreak: 0
+            };
+
+            // Добавляем недостающие поля
+            user = await User.findOneAndUpdate(
+                { userId: req.params.userId },
+                { $set: defaultFields },
+                { new: true, upsert: true }
+            );
         }
 
         // Если есть активный фарминг
@@ -214,7 +244,7 @@ app.post('/api/users/:userId/daily-reward', async (req, res) => {
 
         user.limeAmount += limeReward;
         user.slimeNinjaAttempts += attemptsReward;
-        user.lastDailyReward = now;
+                user.lastDailyReward = now;
 
         await user.save();
 
