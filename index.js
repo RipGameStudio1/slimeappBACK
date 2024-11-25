@@ -8,25 +8,31 @@ const PORT = process.env.PORT || 8000;
 
 app.use(cors());
 app.use(express.json());
-
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+    next();
+});
 mongoose.connect(process.env.MONGODB_URI, {
     useNewUrlParser: true,
     useUnifiedTopology: true,
-    poolSize: 10,
-    socketTimeoutMS: 45000,
     serverSelectionTimeoutMS: 5000,
-    family: 4
-}).then(async () => {
-    console.log('Connected to MongoDB');
-    
-    // Убедимся, что индексы созданы
-    try {
-        await User.createIndexes();
-        console.log('Indexes created successfully');
-    } catch (error) {
-        console.error('Error creating indexes:', error);
-    }
-}).catch(err => console.error('MongoDB connection error:', err));
+    socketTimeoutMS: 45000,
+}).then(() => {
+    console.log('Successfully connected to MongoDB.');
+    console.log('Connection string:', process.env.MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//***:***@')); // Безопасный вывод строки подключения
+}).catch(err => {
+    console.error('MongoDB connection error:', err);
+    process.exit(1);
+});
+
+// Добавьте обработчики событий подключения
+mongoose.connection.on('error', err => {
+    console.error('MongoDB error:', err);
+});
+
+mongoose.connection.on('disconnected', () => {
+    console.log('MongoDB disconnected');
+});
 
 const UserSchema = new mongoose.Schema({
     userId: { type: String, required: true, unique: true, index: true },
@@ -195,18 +201,26 @@ app.get('/health', (req, res) => {
 });
 
 app.get('/api/users/:userId', async (req, res) => {
+    console.log(`Getting user data for userId: ${req.params.userId}`);
     try {
         let user = await User.findOne({ userId: req.params.userId });
-        
+        console.log('Found user:', user);
+
         if (!user) {
+            console.log('User not found, creating new user');
             const referralCode = await generateReferralCode();
-            user = await User.create({
+            user = new User({
                 userId: req.params.userId,
                 referralCode
             });
+            await user.save();
+            console.log('Created new user:', user);
         }
 
         user = await updateUserSchema(user);
+        console.log('Updated user schema:', user);
+
+        res.json(user);
 
         // Если есть активный фарминг
         if (user.isActive && user.startTime) {
@@ -245,8 +259,15 @@ app.get('/api/users/:userId', async (req, res) => {
         
         res.json(user);
     } catch (error) {
-        console.error('Error:', error);
-        res.status(500).json({ error: error.message });
+        console.error('Error in /api/users/:userId:', {
+            error: error.message,
+            stack: error.stack,
+            userId: req.params.userId
+        });
+        res.status(500).json({
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
     }
 });
 
@@ -477,8 +498,16 @@ app.post('/api/users/referral', async (req, res) => {
 });
 
 app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).send('Something broke!');
+    console.error('Error details:', {
+        message: err.message,
+        stack: err.stack,
+        timestamp: new Date().toISOString()
+    });
+    res.status(500).json({
+        error: 'Internal Server Error',
+        message: err.message,
+        timestamp: new Date().toISOString()
+    });
 });
 
 const server = app.listen(PORT, '0.0.0.0', () => {
