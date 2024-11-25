@@ -58,6 +58,81 @@ const UserSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', UserSchema);
 
+async function updateUserSchema(user) {
+    const defaultValues = {
+        limeAmount: 0,
+        farmingCount: 0,
+        isActive: false,
+        startTime: null,
+        level: 1,
+        xp: 0,
+        lastUpdate: Date.now(),
+        achievements: {
+            firstFarm: false,
+            speedDemon: false,
+            millionaire: false
+        },
+        referralCode: user.referralCode || await generateReferralCode(),
+        referrer: null,
+        referrals: [],
+        totalReferralEarnings: 0,
+        lastDailyReward: null,
+        dailyRewardStreak: 0,
+        slimeNinjaAttempts: 5,
+        totalDailyStreak: 0
+    };
+
+    let needsUpdate = false;
+    const updates = {};
+
+    for (const [key, value] of Object.entries(defaultValues)) {
+        if (user[key] === undefined) {
+            updates[key] = value;
+            needsUpdate = true;
+        }
+    }
+
+    if (!user.achievements || typeof user.achievements !== 'object') {
+        updates.achievements = defaultValues.achievements;
+        needsUpdate = true;
+    } else {
+        for (const [key, value] of Object.entries(defaultValues.achievements)) {
+            if (user.achievements[key] === undefined) {
+                if (!updates.achievements) updates.achievements = { ...user.achievements };
+                updates.achievements[key] = value;
+                needsUpdate = true;
+            }
+        }
+    }
+
+    if (needsUpdate) {
+        console.log(`Updating schema for user ${user.userId}`);
+        return await User.findOneAndUpdate(
+            { userId: user.userId },
+            { $set: updates },
+            { new: true }
+        );
+    }
+
+    return user;
+}
+
+async function updateAllUsers() {
+    try {
+        const users = await User.find({});
+        console.log(`Checking schema for ${users.length} users`);
+        
+        for (const user of users) {
+            await updateUserSchema(user);
+        }
+        
+        console.log('All users schema updated successfully');
+    } catch (error) {
+        console.error('Error updating users schema:', error);
+    }
+}
+
+
 // Генерация уникального реферального кода
 async function generateReferralCode() {
     const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -125,12 +200,13 @@ app.get('/api/users/:userId', async (req, res) => {
         
         if (!user) {
             const referralCode = await generateReferralCode();
-            user = await User.create({ 
+            user = await User.create({
                 userId: req.params.userId,
-                limeAmount: 0,
                 referralCode
             });
         }
+
+        user = await updateUserSchema(user);
 
         // Если есть активный фарминг
         if (user.isActive && user.startTime) {
