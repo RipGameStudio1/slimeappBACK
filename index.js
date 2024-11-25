@@ -12,12 +12,16 @@ app.use(express.json());
 mongoose.connect(process.env.MONGODB_URI, {
     useNewUrlParser: true,
     useUnifiedTopology: true,
-})
+    poolSize: 10,
+    socketTimeoutMS: 45000,
+    serverSelectionTimeoutMS: 5000,
+    family: 4
+});
 .then(() => console.log('Connected to MongoDB'))
 .catch(err => console.error('MongoDB connection error:', err));
 
 const UserSchema = new mongoose.Schema({
-    userId: { type: String, required: true, unique: true },
+    userId: { type: String, required: true, unique: true, index: true },
     limeAmount: { type: Number, default: 0 },
     farmingCount: { type: Number, default: 0 },
     isActive: { type: Boolean, default: false },
@@ -234,18 +238,26 @@ app.post('/api/users/:userId/daily-reward', async (req, res) => {
 
 app.put('/api/users/:userId', async (req, res) => {
     try {
-        console.log('Updating user data:', req.body); // Для отладки
-
-        const updateData = {
-            ...req.body,
-            lastUpdate: new Date()
-        };
-
-        // Если передаются достижения, убедимся что они сохраняются правильно
+        const updateData = { ...req.body };
+        
+        // Если обновляются достижения, обрабатываем их отдельно
         if (updateData.achievements) {
-            console.log('Updating achievements:', updateData.achievements); // Для отладки
+            const user = await User.findOne({ userId: req.params.userId });
+            if (!user) {
+                return res.status(404).json({ error: 'User not found' });
+            }
+
+            // Обновляем только измененные достижения
+            user.achievements = {
+                ...user.achievements,
+                ...updateData.achievements
+            };
+
+            const savedUser = await user.save();
+            return res.json(savedUser);
         }
 
+        // Для других обновлений используем findOneAndUpdate
         const updatedUser = await User.findOneAndUpdate(
             { userId: req.params.userId },
             { $set: updateData },
@@ -256,7 +268,6 @@ app.put('/api/users/:userId', async (req, res) => {
             return res.status(404).json({ error: 'User not found' });
         }
 
-        console.log('Updated user achievements:', updatedUser.achievements); // Для отладки
         res.json(updatedUser);
     } catch (error) {
         console.error('Error updating user:', error);
