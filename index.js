@@ -8,30 +8,16 @@ const PORT = process.env.PORT || 8000;
 
 app.use(cors());
 app.use(express.json());
-app.use((req, res, next) => {
-    console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+
+// Middleware для проверки состояния подключения
+app.use(async (req, res, next) => {
+    if (mongoose.connection.readyState !== 1) {
+        return res.status(503).json({
+            error: 'Database connection is not ready',
+            readyState: mongoose.connection.readyState
+        });
+    }
     next();
-});
-mongoose.connect(process.env.MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-    serverSelectionTimeoutMS: 5000,
-    socketTimeoutMS: 45000,
-}).then(() => {
-    console.log('Successfully connected to MongoDB.');
-    console.log('Connection string:', process.env.MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//***:***@')); // Безопасный вывод строки подключения
-}).catch(err => {
-    console.error('MongoDB connection error:', err);
-    process.exit(1);
-});
-
-// Добавьте обработчики событий подключения
-mongoose.connection.on('error', err => {
-    console.error('MongoDB error:', err);
-});
-
-mongoose.connection.on('disconnected', () => {
-    console.log('MongoDB disconnected');
 });
 
 const UserSchema = new mongoose.Schema({
@@ -63,6 +49,47 @@ const UserSchema = new mongoose.Schema({
 });
 
 const User = mongoose.model('User', UserSchema);
+
+const connectWithRetry = () => {
+    mongoose.connect(process.env.MONGODB_URI, {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+        serverSelectionTimeoutMS: 30000,
+        socketTimeoutMS: 45000,
+        family: 4,
+        maxPoolSize: 10,
+        connectTimeoutMS: 30000,
+        retryWrites: true
+    }).then(async () => {
+        console.log('Connected to MongoDB');
+        try {
+            await User.createIndexes();
+            console.log('Indexes created successfully');
+        } catch (error) {
+            console.error('Error creating indexes:', error);
+        }
+    }).catch(err => {
+        console.error('MongoDB connection error:', err);
+        console.log('Retrying connection in 5 seconds...');
+        setTimeout(connectWithRetry, 5000);
+    });
+};
+
+// Обработчики событий подключения MongoDB
+mongoose.connection.on('connected', () => {
+    console.log('Mongoose connected to MongoDB');
+});
+
+mongoose.connection.on('error', (err) => {
+    console.error('Mongoose connection error:', err);
+});
+
+mongoose.connection.on('disconnected', () => {
+    console.log('Mongoose disconnected from MongoDB');
+});
+
+// Запуск подключения
+connectWithRetry();
 
 async function updateUserSchema(user) {
     const defaultValues = {
@@ -119,32 +146,13 @@ async function updateUserSchema(user) {
             { new: true }
         );
     }
-
     return user;
 }
 
-async function updateAllUsers() {
-    try {
-        const users = await User.find({});
-        console.log(`Checking schema for ${users.length} users`);
-        
-        for (const user of users) {
-            await updateUserSchema(user);
-        }
-        
-        console.log('All users schema updated successfully');
-    } catch (error) {
-        console.error('Error updating users schema:', error);
-    }
-}
-
-
-// Генерация уникального реферального кода
 async function generateReferralCode() {
     const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let code;
     let isUnique = false;
-
     while (!isUnique) {
         code = '';
         for (let i = 0; i < 8; i++) {
@@ -158,13 +166,214 @@ async function generateReferralCode() {
     return code;
 }
 
+// Routes
+app.get('/', (req, res) => {
+    res.send('Backend is running');
+});
+
+app.get('/health', (req, res) => {
+    res.status(200).json({
+        status: 'OK',
+        timestamp: new Date(),
+        port: PORT,
+        mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+    });
+});
+
+app.get('/api/users/:userId', async (req, res) => {
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            throw new Error('Database connection is not ready');
+        }
+
+        let user = await User.findOne({ userId: req.params.userId });
+        if (!user) {
+            const referralCode = await generateReferralCode();
+            user = await User.create({ userId: req.params.userId, referralCode });
+        }
+
+        user = await updateUserSchema(user);
+
+        if (user.isActive && user.startTime) {
+            const now = Date.now();
+            const startTime = new Date(user.startTime).getTime();
+            const elapsedTime = now - startTime;
+            const farmingDuration = 30 * 1000;
+            const baseAmount = user.limeAmount;
+            const totalReward = 70;
+
+            if (elapsedTime >= farmingDuration) {
+                user.limeAmount = baseAmount + totalReward;
+                user.xp += totalReward * 0.1;
+                user.isActive = false;
+                user.startTime = null;
+                await user.save();
+            } else {
+                const progress = (elapsedTime / farmingDuration) * 100;
+                const currentEarned = (totalReward * elapsedTime) / farmingDuration;
+                const currentXpEarned = currentEarned * 0.1;
+                return res.json({
+                    ...user.toObject(),
+                    currentProgress: {
+                        progress,
+                        currentLimeAmount: baseAmount + currentEarned,
+                        currentXp: user.xp + currentXpEarned,
+                        remainingTime: Math.ceil((farmingDuration - elapsedTime) / 1000)
+                    }
+                });
+            }
+        }
+        res.json(user);
+    } catch (error) {
+        console.error('Error:', error);
+        if (error.message === 'Database connection is not ready') {
+            return res.status(503).json({
+                error: 'Service temporarily unavailable',
+                details: 'Database connection issue'
+            });
+        }
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/users/:userId/start-farming', async (req, res) => {
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            throw new Error('Database connection is not ready');
+        }
+
+        const user = await User.findOne({ userId: req.params.userId });
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        if (user.isActive) {
+            return res.status(400).json({ error: 'Farming already in progress' });
+        }
+
+        user.isActive = true;
+        user.startTime = new Date();
+        await user.save();
+        res.json(user);
+    } catch (error) {
+        console.error('Error starting farming:', error);
+        if (error.message === 'Database connection is not ready') {
+            return res.status(503).json({
+                error: 'Service temporarily unavailable',
+                details: 'Database connection issue'
+            });
+        }
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/users/:userId/daily-reward', async (req, res) => {
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            throw new Error('Database connection is not ready');
+        }
+
+        const user = await User.findOne({ userId: req.params.userId });
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const now = new Date();
+        const lastReward = user.lastDailyReward ? new Date(user.lastDailyReward) : null;
+
+        if (!lastReward) {
+            user.dailyRewardStreak = 1;
+        } else {
+            const lastRewardDate = new Date(lastReward.setHours(0, 0, 0, 0));
+            const todayDate = new Date(now.setHours(0, 0, 0, 0));
+            const daysDiff = Math.floor((todayDate - lastRewardDate) / (24 * 60 * 60 * 1000));
+
+            if (daysDiff === 1) {
+                user.dailyRewardStreak += 1;
+            } else if (daysDiff === 0) {
+                return res.status(400).json({ error: 'Already claimed today' });
+            } else {
+                user.dailyRewardStreak = 1;
+            }
+        }
+
+        const rewardDay = Math.min(user.dailyRewardStreak, 7);
+        const limeReward = rewardDay * 10;
+        const attemptsReward = rewardDay;
+
+        user.limeAmount += limeReward;
+        user.slimeNinjaAttempts += attemptsReward;
+        user.lastDailyReward = now;
+        await user.save();
+
+        res.json({
+            streak: user.dailyRewardStreak,
+            rewardDay: rewardDay,
+            limeReward,
+            attemptsReward,
+            totalLime: user.limeAmount,
+            totalAttempts: user.slimeNinjaAttempts
+        });
+    } catch (error) {
+        console.error('Error in daily reward:', error);
+        if (error.message === 'Database connection is not ready') {
+            return res.status(503).json({
+                error: 'Service temporarily unavailable',
+                details: 'Database connection issue'
+            });
+        }
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.put('/api/users/:userId', async (req, res) => {
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            throw new Error('Database connection is not ready');
+        }
+
+        const updateData = { ...req.body };
+        if (updateData.achievements) {
+            const user = await User.findOne({ userId: req.params.userId });
+            if (!user) {
+                return res.status(404).json({ error: 'User not found' });
+            }
+            user.achievements = { ...user.achievements, ...updateData.achievements };
+            const savedUser = await user.save();
+            return res.json(savedUser);
+        }
+
+        const updatedUser = await User.findOneAndUpdate(
+            { userId: req.params.userId },
+            { $set: updateData },
+            { new: true }
+        );
+
+        if (!updatedUser) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        res.json(updatedUser);
+    } catch (error) {
+        console.error('Error updating user:', error);
+        if (error.message === 'Database connection is not ready') {
+            return res.status(503).json({
+                error: 'Service temporarily unavailable',
+                details: 'Database connection issue'
+            });
+        }
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.post('/api/users/:userId/update-attempts', async (req, res) => {
     try {
+        if (mongoose.connection.readyState !== 1) {
+            throw new Error('Database connection is not ready');
+        }
+
         const { attempts } = req.body;
-        
-        // Строгая проверка значения
         if (typeof attempts !== 'number' || attempts < 0) {
-            return res.status(400).json({ 
+            return res.status(400).json({
                 error: 'Invalid attempts value',
                 currentAttempts: (await User.findOne({ userId: req.params.userId })).slimeNinjaAttempts
             });
@@ -183,276 +392,27 @@ app.post('/api/users/:userId/update-attempts', async (req, res) => {
         res.json({ attempts: user.slimeNinjaAttempts });
     } catch (error) {
         console.error('Error updating attempts:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.get('/', (req, res) => {
-    res.send('Backend is running');
-});
-
-app.get('/health', (req, res) => {
-    res.status(200).json({ 
-        status: 'OK',
-        timestamp: new Date(),
-        port: PORT,
-        mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
-    });
-});
-
-app.get('/api/users/:userId', async (req, res) => {
-    console.log(`Getting user data for userId: ${req.params.userId}`);
-    try {
-        let user = await User.findOne({ userId: req.params.userId });
-        console.log('Found user:', user);
-
-        if (!user) {
-            console.log('User not found, creating new user');
-            const referralCode = await generateReferralCode();
-            user = new User({
-                userId: req.params.userId,
-                referralCode
+        if (error.message === 'Database connection is not ready') {
+            return res.status(503).json({
+                error: 'Service temporarily unavailable',
+                details: 'Database connection issue'
             });
-            await user.save();
-            console.log('Created new user:', user);
         }
-
-        user = await updateUserSchema(user);
-        console.log('Updated user schema:', user);
-
-        res.json(user);
-
-        // Если есть активный фарминг
-        if (user.isActive && user.startTime) {
-            const now = Date.now();
-            const startTime = new Date(user.startTime).getTime();
-            const elapsedTime = now - startTime;
-            const farmingDuration = 30 * 1000; // 30 секунд
-            const baseAmount = user.limeAmount; // Базовый баланс на момент начала фарминга
-            const totalReward = 70; // Общая награда за фарминг
-
-            if (elapsedTime >= farmingDuration) {
-                // Завершаем фарминг
-                user.limeAmount = baseAmount + totalReward;
-                user.xp += totalReward * 0.1;
-                user.isActive = false;
-                user.startTime = null;
-                await user.save();
-            } else {
-                // Вычисляем текущий прогресс
-                const progress = (elapsedTime / farmingDuration) * 100;
-                const currentEarned = (totalReward * elapsedTime) / farmingDuration;
-                const currentXpEarned = currentEarned * 0.1;
-
-                // Отправляем текущий прогресс
-                return res.json({
-                    ...user.toObject(),
-                    currentProgress: {
-                        progress,
-                        currentLimeAmount: baseAmount + currentEarned,
-                        currentXp: user.xp + currentXpEarned,
-                        remainingTime: Math.ceil((farmingDuration - elapsedTime) / 1000)
-                    }
-                });
-            }
-        }
-        
-        res.json(user);
-    } catch (error) {
-        console.error('Error in /api/users/:userId:', {
-            error: error.message,
-            stack: error.stack,
-            userId: req.params.userId
-        });
-        res.status(500).json({
-            error: error.message,
-            timestamp: new Date().toISOString()
-        });
-    }
-});
-
-app.post('/api/users/:userId/start-farming', async (req, res) => {
-    try {
-        const user = await User.findOne({ userId: req.params.userId });
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        if (user.isActive) {
-            return res.status(400).json({ error: 'Farming already in progress' });
-        }
-
-        user.isActive = true;
-        user.startTime = new Date();
-        await user.save();
-
-        res.json(user);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.post('/api/users/:userId/daily-reward', async (req, res) => {
-    try {
-        const user = await User.findOne({ userId: req.params.userId });
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        const now = new Date();
-        const lastReward = user.lastDailyReward ? new Date(user.lastDailyReward) : null;
-        
-        // Если это первая награда пользователя
-        if (!lastReward) {
-            user.dailyRewardStreak = 1;
-        } else {
-            const lastRewardDate = new Date(lastReward.setHours(0, 0, 0, 0));
-            const todayDate = new Date(now.setHours(0, 0, 0, 0));
-            const daysDiff = Math.floor((todayDate - lastRewardDate) / (24 * 60 * 60 * 1000));
-            if (daysDiff === 1) {
-                user.dailyRewardStreak += 1;
-            } else if (daysDiff === 0) {
-                return res.status(400).json({ error: 'Already claimed today' });
-            } else {
-                user.dailyRewardStreak = 1;
-            }
-        }
-        const rewardDay = Math.min(user.dailyRewardStreak, 7);
-        const limeReward = rewardDay * 10;
-        const attemptsReward = rewardDay;
-
-        user.limeAmount += limeReward;
-        user.slimeNinjaAttempts += attemptsReward;
-        user.lastDailyReward = now;
-
-        await user.save();
-
-        res.json({
-            streak: user.dailyRewardStreak,
-            rewardDay: rewardDay,
-            limeReward,
-            attemptsReward,
-            totalLime: user.limeAmount,
-            totalAttempts: user.slimeNinjaAttempts
-        });
-    } catch (error) {
-        console.error('Error in daily reward:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.put('/api/users/:userId', async (req, res) => {
-    try {
-        const updateData = { ...req.body };
-        
-        // Если обновляются достижения, обрабатываем их отдельно
-        if (updateData.achievements) {
-            const user = await User.findOne({ userId: req.params.userId });
-            if (!user) {
-                return res.status(404).json({ error: 'User not found' });
-            }
-
-            // Обновляем только измененные достижения
-            user.achievements = {
-                ...user.achievements,
-                ...updateData.achievements
-            };
-
-            const savedUser = await user.save();
-            return res.json(savedUser);
-        }
-
-        // Для других обновлений используем findOneAndUpdate
-        const updatedUser = await User.findOneAndUpdate(
-            { userId: req.params.userId },
-            { $set: updateData },
-            { new: true }
-        );
-
-        if (!updatedUser) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        res.json(updatedUser);
-    } catch (error) {
-        console.error('Error updating user:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.put('/api/users/:userId/attempts', async (req, res) => {
-    try {
-        const { attempts } = req.body;
-        const user = await User.findOneAndUpdate(
-            { userId: req.params.userId },
-            { $set: { slimeNinjaAttempts: attempts } },
-            { new: true }
-        );
-        res.json({ attempts: user.slimeNinjaAttempts });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-app.post('/api/users/:userId/complete-farming', async (req, res) => {
-    try {
-        const { limeAmount, farmingCount } = req.body;
-        const user = await User.findOne({ userId: req.params.userId });
-        
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        // Вычисляем заработок для реферера (10%)
-        if (user.referrer) {
-            const referrer = await User.findOne({ userId: user.referrer });
-            if (referrer) {
-                const referralEarnings = (limeAmount - user.limeAmount) * 0.1;
-                const referralIndex = referrer.referrals.findIndex(r => r.userId === user.userId);
-                
-                if (referralIndex !== -1) {
-                    referrer.referrals[referralIndex].earnings += referralEarnings;
-                }
-                referrer.totalReferralEarnings += referralEarnings;
-                await referrer.save();
-            }
-        }
-        
-        const updatedUser = await User.findOneAndUpdate(
-            { userId: req.params.userId },
-            {
-                $set: {
-                    limeAmount,
-                    farmingCount,
-                    isActive: false,
-                    startTime: null,
-                    lastUpdate: new Date()
-                }
-            },
-            { new: true }
-        );
-
-        res.json(updatedUser);
-    } catch (error) {
-        console.error('Error completing farming:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
 app.get('/api/users/:userId/referrals', async (req, res) => {
     try {
+        if (mongoose.connection.readyState !== 1) {
+            throw new Error('Database connection is not ready');
+        }
+
         const user = await User.findOne({ userId: req.params.userId });
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
         }
-        
-        // Добавим логирование
-        console.log('Referral data:', {
-            referralCode: user.referralCode,
-            referralCount: user.referrals.length,
-            totalEarnings: user.totalReferralEarnings,
-            referrals: user.referrals
-        });
-        
+
         res.json({
             referralCode: user.referralCode,
             referralCount: user.referrals.length,
@@ -461,59 +421,28 @@ app.get('/api/users/:userId/referrals', async (req, res) => {
         });
     } catch (error) {
         console.error('Error in referrals endpoint:', error);
+        if (error.message === 'Database connection is not ready') {
+            return res.status(503).json({
+                error: 'Service temporarily unavailable',
+                details: 'Database connection issue'
+            });
+        }
         res.status(500).json({ error: error.message });
     }
 });
 
-app.post('/api/users/referral', async (req, res) => {
-    try {
-        const { referralCode, userId } = req.body;
-        
-        const referrer = await User.findOne({ referralCode });
-        if (!referrer) {
-            return res.status(404).json({ error: 'Invalid referral code' });
-        }
-        
-        const user = await User.findOne({ userId });
-        if (user.referrer) {
-            return res.status(400).json({ error: 'User already has a referrer' });
-        }
-        
-        // Добавляем реферала
-        referrer.referrals.push({
-            userId: userId,
-            joinDate: new Date(),
-            earnings: 0
-        });
-        await referrer.save();
-        
-        // Обновляем информацию о пользователе
-        user.referrer = referrer.userId;
-        await user.save();
-        
-        res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
+// Error handling middleware
 app.use((err, req, res, next) => {
-    console.error('Error details:', {
-        message: err.message,
-        stack: err.stack,
-        timestamp: new Date().toISOString()
-    });
-    res.status(500).json({
-        error: 'Internal Server Error',
-        message: err.message,
-        timestamp: new Date().toISOString()
-    });
+    console.error(err.stack);
+    res.status(500).send('Something broke!');
 });
 
+// Server initialization
 const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server is running on port ${PORT}`);
 });
 
+// Graceful shutdown handlers
 process.on('SIGTERM', () => {
     console.log('SIGTERM received');
     server.close(() => {
@@ -533,3 +462,69 @@ process.on('SIGINT', () => {
         });
     });
 });
+
+// Добавляем обработчик необработанных ошибок
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error);
+    // Gracefully shutdown the server
+    server.close(() => {
+        mongoose.connection.close(false, () => {
+            process.exit(1);
+        });
+    });
+});
+
+// Добавляем периодическую проверку подключения к базе данных
+setInterval(() => {
+    if (mongoose.connection.readyState !== 1) {
+        console.log('Database connection lost, attempting to reconnect...');
+        connectWithRetry();
+    }
+}, 30000); // Проверка каждые 30 секунд
+
+// Добавляем роут для проверки статуса сервера
+app.get('/status', (req, res) => {
+    res.json({
+        status: 'ok',
+        dbConnection: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+        uptime: process.uptime(),
+        timestamp: new Date(),
+        memory: process.memoryUsage(),
+        version: process.version
+    });
+});
+
+// Добавляем middleware для логирования запросов
+app.use((req, res, next) => {
+    const start = Date.now();
+    res.on('finish', () => {
+        const duration = Date.now() - start;
+        console.log(`${req.method} ${req.url} ${res.statusCode} ${duration}ms`);
+    });
+    next();
+});
+
+// Добавляем обработчик для очистки неактивных сессий фарминга
+setInterval(async () => {
+    try {
+        const thirtySecondsAgo = new Date(Date.now() - 30000);
+        await User.updateMany(
+            {
+                isActive: true,
+                startTime: { $lt: thirtySecondsAgo }
+            },
+            {
+                $set: {
+                    isActive: false,
+                    startTime: null
+                }
+            }
+        );
+    } catch (error) {
+        console.error('Error cleaning inactive farming sessions:', error);
+    }
+}, 60000); // Проверка каждую минуту
