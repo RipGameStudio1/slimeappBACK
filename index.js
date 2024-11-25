@@ -269,10 +269,6 @@ app.post('/api/users/:userId/start-farming', async (req, res) => {
 
 app.post('/api/users/:userId/daily-reward', async (req, res) => {
     try {
-        if (mongoose.connection.readyState !== 1) {
-            throw new Error('Database connection is not ready');
-        }
-
         const user = await User.findOne({ userId: req.params.userId });
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
@@ -280,52 +276,63 @@ app.post('/api/users/:userId/daily-reward', async (req, res) => {
 
         const now = new Date();
         const lastReward = user.lastDailyReward ? new Date(user.lastDailyReward) : null;
+        let newStreak = 1;
 
-        if (!lastReward) {
-            user.dailyRewardStreak = 1;
-        } else {
-            const lastRewardDate = new Date(lastReward.setHours(0, 0, 0, 0));
-            const todayDate = new Date(now.setHours(0, 0, 0, 0));
+        if (lastReward) {
+            // Установим время на начало дня для корректного сравнения
+            const lastRewardDate = new Date(lastReward);
+            lastRewardDate.setHours(0, 0, 0, 0);
+            
+            const todayDate = new Date(now);
+            todayDate.setHours(0, 0, 0, 0);
+            
             const daysDiff = Math.floor((todayDate - lastRewardDate) / (24 * 60 * 60 * 1000));
 
-            if (daysDiff === 1) {
-                user.dailyRewardStreak += 1;
-            } else if (daysDiff === 0) {
-                return res.status(400).json({ error: 'Already claimed today' });
-            } else {
-                user.dailyRewardStreak = 1;
+            if (daysDiff === 0) {
+                return res.status(400).json({ 
+                    error: 'Already claimed today',
+                    nextReward: new Date(lastRewardDate.getTime() + 24 * 60 * 60 * 1000)
+                });
+            } else if (daysDiff === 1) {
+                // Продолжаем серию
+                newStreak = user.dailyRewardStreak + 1;
             }
+            // Если разница больше 1 дня, начинаем новую серию (newStreak = 1)
         }
 
-        const rewardDay = Math.min(user.dailyRewardStreak, 7);
+        // Ограничиваем серию максимум 7 днями
+        const rewardDay = Math.min(newStreak, 7);
         const limeReward = rewardDay * 10;
         const attemptsReward = rewardDay;
 
+        // Обновляем данные пользователя
+        user.dailyRewardStreak = newStreak;
         user.limeAmount += limeReward;
         user.slimeNinjaAttempts += attemptsReward;
         user.lastDailyReward = now;
+        user.totalDailyStreak = Math.max(user.totalDailyStreak || 0, newStreak);
+
         await user.save();
 
         res.json({
-            streak: user.dailyRewardStreak,
+            success: true,
+            streak: newStreak,
             rewardDay: rewardDay,
-            limeReward,
-            attemptsReward,
+            limeReward: limeReward,
+            attemptsReward: attemptsReward,
             totalLime: user.limeAmount,
-            totalAttempts: user.slimeNinjaAttempts
+            totalAttempts: user.slimeNinjaAttempts,
+            nextReward: new Date(now.getTime() + 24 * 60 * 60 * 1000)
         });
+
     } catch (error) {
         console.error('Error in daily reward:', error);
-        if (error.message === 'Database connection is not ready') {
-            return res.status(503).json({
-                error: 'Service temporarily unavailable',
-                details: 'Database connection issue'
-            });
-        }
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ 
+            error: 'Failed to process daily reward',
+            details: error.message 
+        });
     }
 });
-
 app.put('/api/users/:userId', async (req, res) => {
     try {
         if (mongoose.connection.readyState !== 1) {
