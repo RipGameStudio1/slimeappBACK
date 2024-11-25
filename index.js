@@ -16,9 +16,17 @@ mongoose.connect(process.env.MONGODB_URI, {
     socketTimeoutMS: 45000,
     serverSelectionTimeoutMS: 5000,
     family: 4
-});
-.then(() => console.log('Connected to MongoDB'))
-.catch(err => console.error('MongoDB connection error:', err));
+}).then(async () => {
+    console.log('Connected to MongoDB');
+    
+    // Убедимся, что индексы созданы
+    try {
+        await User.createIndexes();
+        console.log('Indexes created successfully');
+    } catch (error) {
+        console.error('Error creating indexes:', error);
+    }
+}).catch(err => console.error('MongoDB connection error:', err));
 
 const UserSchema = new mongoose.Schema({
     userId: { type: String, required: true, unique: true, index: true },
