@@ -149,6 +149,43 @@ async function updateUserSchema(user) {
     return user;
 }
 
+async function checkAndUpdateAchievements(user) {
+    let achievementsUpdated = false;
+    const updates = {};
+
+    // First Farm Achievement
+    if (!user.achievements.firstFarm && user.farmingCount > 0) {
+        updates['achievements.firstFarm'] = true;
+        achievementsUpdated = true;
+    }
+
+    // Speed Demon Achievement
+    if (!user.achievements.speedDemon && user.level >= 5) {
+        updates['achievements.speedDemon'] = true;
+        achievementsUpdated = true;
+    }
+
+    // Millionaire Achievement
+    if (!user.achievements.millionaire && user.limeAmount >= 1000000) {
+        updates['achievements.millionaire'] = true;
+        achievementsUpdated = true;
+    }
+
+    if (achievementsUpdated) {
+        const updatedUser = await User.findOneAndUpdate(
+            { userId: user.userId },
+            { $set: updates },
+            { new: true }
+        );
+        return {
+            user: updatedUser,
+            newAchievements: Object.keys(updates).map(key => key.replace('achievements.', ''))
+        };
+    }
+
+    return { user, newAchievements: [] };
+}
+
 async function generateReferralCode() {
     const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let code;
@@ -238,10 +275,6 @@ app.get('/api/users/:userId', async (req, res) => {
 
 app.post('/api/users/:userId/start-farming', async (req, res) => {
     try {
-        if (mongoose.connection.readyState !== 1) {
-            throw new Error('Database connection is not ready');
-        }
-
         const user = await User.findOne({ userId: req.params.userId });
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
@@ -253,16 +286,18 @@ app.post('/api/users/:userId/start-farming', async (req, res) => {
 
         user.isActive = true;
         user.startTime = new Date();
+        user.farmingCount = (user.farmingCount || 0) + 1;
         await user.save();
-        res.json(user);
+
+        // Проверяем достижения после начала фарминга
+        const { user: updatedUser, newAchievements } = await checkAndUpdateAchievements(user);
+
+        res.json({
+            ...updatedUser.toObject(),
+            newAchievements
+        });
     } catch (error) {
         console.error('Error starting farming:', error);
-        if (error.message === 'Database connection is not ready') {
-            return res.status(503).json({
-                error: 'Service temporarily unavailable',
-                details: 'Database connection issue'
-            });
-        }
         res.status(500).json({ error: error.message });
     }
 });
