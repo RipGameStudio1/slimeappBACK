@@ -1,40 +1,77 @@
-const SecurityService = require('./security');
-const TransactionManager = require('./transactions');
+const SecurityService = require('./SecurityService');
+const TransactionManager = require('./TransactionManager');
 
 class DataService {
     static async encryptAndSave(model, data, sensitiveFields) {
         const encryptedData = {};
         const regularData = {};
 
-        Object.entries(data).forEach(([key, value]) => {
+        for (const [key, value] of Object.entries(data)) {
             if (sensitiveFields.includes(key)) {
-                encryptedData[key] = SecurityService.encrypt(JSON.stringify(value));
+                encryptedData[key] = SecurityService.encrypt(
+                    typeof value === 'object' ? JSON.stringify(value) : String(value)
+                );
             } else {
-                regularData[key] = value;
+                regularData[key] = SecurityService.sanitizeInput(value);
             }
-        });
+        }
 
         return await TransactionManager.executeInTransaction(async (session) => {
             const document = new model({
                 ...regularData,
-                encryptedData
+                encryptedData,
+                lastUpdate: new Date()
             });
+            
+            await document.validate();
             return await document.save({ session });
         });
     }
 
     static async decryptData(document, sensitiveFields) {
-        const decryptedData = { ...document.toObject() };
+        if (!document) return null;
 
-        sensitiveFields.forEach(field => {
-            if (document.encryptedData && document.encryptedData[field]) {
-                decryptedData[field] = JSON.parse(
-                    SecurityService.decrypt(document.encryptedData[field])
-                );
+        const decryptedData = { ...document.toObject() };
+        delete decryptedData.encryptedData;
+
+        for (const field of sensitiveFields) {
+            if (document.encryptedData?.[field]) {
+                try {
+                    const decrypted = SecurityService.decrypt(document.encryptedData[field]);
+                    decryptedData[field] = JSON.parse(decrypted);
+                } catch (error) {
+                    console.error(`Error decrypting field ${field}:`, error);
+                    decryptedData[field] = null;
+                }
             }
-        });
+        }
 
         return decryptedData;
+    }
+
+    static async updateSecureData(model, filter, updates, sensitiveFields) {
+        return await TransactionManager.atomicOperation(
+            model,
+            filter,
+            this.prepareSecureUpdate(updates, sensitiveFields)
+        );
+    }
+
+    static prepareSecureUpdate(updates, sensitiveFields) {
+        const secureUpdates = {};
+        const encryptedUpdates = {};
+
+        for (const [key, value] of Object.entries(updates)) {
+            if (sensitiveFields.includes(key)) {
+                encryptedUpdates[`encryptedData.${key}`] = SecurityService.encrypt(
+                    typeof value === 'object' ? JSON.stringify(value) : String(value)
+                );
+            } else {
+                secureUpdates[key] = SecurityService.sanitizeInput(value);
+            }
+        }
+
+        return { $set: { ...secureUpdates, ...encryptedUpdates } };
     }
 }
 
