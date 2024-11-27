@@ -4,13 +4,9 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-
-// Импорт сервисов безопасности
 const SecurityService = require('./services/SecurityService');
 const TransactionManager = require('./services/TransactionManager');
 const DataService = require('./services/DataService');
-
-// Импорт middleware
 const { validateRequest, schemas } = require('./middleware/validation');
 const authMiddleware = require('./middleware/auth');
 const rateLimiter = require('./middleware/rateLimiter');
@@ -18,18 +14,74 @@ const rateLimiter = require('./middleware/rateLimiter');
 const app = express();
 
 // Базовые middleware
-app.use(cors());
 app.use(express.json());
-app.use(helmet());
+
+// Улучшенная настройка helmet
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'"],
+            styleSrc: ["'self'"],
+            imgSrc: ["'self'", "data:", "https:"],
+            connectSrc: ["'self'"],
+        },
+    },
+    crossOriginEmbedderPolicy: true,
+    crossOriginOpenerPolicy: true,
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    dnsPrefetchControl: true,
+    frameguard: { action: "deny" },
+    hidePoweredBy: true,
+    hsts: true,
+    ieNoOpen: true,
+    noSniff: true,
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+    xssFilter: true,
+}));
+
+// Улучшенная настройка CORS
+app.use(cors({
+    origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
+    maxAge: 86400
+}));
+
+// Rate limiting
 app.use('/api/', rateLimiter);
 
-// Схема пользователя с улучшенной безопасностью
+// Глобальный middleware для санитизации входных данных
+app.use((req, res, next) => {
+    if (req.body) {
+        req.body = Object.entries(req.body).reduce((acc, [key, value]) => {
+            acc[key] = SecurityService.sanitizeInput(value);
+            return acc;
+        }, {});
+    }
+    if (req.params) {
+        req.params = Object.entries(req.params).reduce((acc, [key, value]) => {
+            acc[key] = SecurityService.sanitizeInput(value);
+            return acc;
+        }, {});
+    }
+    next();
+});
+
+// Схема пользователя
 const UserSchema = new mongoose.Schema({
     userId: { 
         type: String, 
         required: true, 
         unique: true,
-        index: true
+        index: true,
+        validate: {
+            validator: function(v) {
+                return /^[a-zA-Z0-9_-]+$/.test(v);
+            },
+            message: 'Invalid user ID format'
+        }
     },
     limeAmount: { 
         type: Number, 
@@ -41,28 +93,31 @@ const UserSchema = new mongoose.Schema({
     },
     farmingCount: { 
         type: Number, 
-        default: 0 
+        default: 0,
+        validate: {
+            validator: Number.isInteger,
+            message: 'Farming count must be an integer'
+        }
     },
-    isActive: { 
-        type: Boolean, 
-        default: false 
-    },
-    startTime: { 
-        type: Date, 
-        default: null 
-    },
+    isActive: { type: Boolean, default: false },
+    startTime: { type: Date, default: null },
     level: { 
         type: Number, 
-        default: 1 
+        default: 1,
+        validate: {
+            validator: Number.isInteger,
+            message: 'Level must be an integer'
+        }
     },
     xp: { 
         type: Number, 
-        default: 0 
+        default: 0,
+        validate: {
+            validator: Number.isFinite,
+            message: 'Invalid XP amount'
+        }
     },
-    lastUpdate: { 
-        type: Date, 
-        default: Date.now 
-    },
+    lastUpdate: { type: Date, default: Date.now },
     achievements: {
         firstFarm: { type: Boolean, default: false },
         speedDemon: { type: Boolean, default: false },
@@ -82,34 +137,52 @@ const UserSchema = new mongoose.Schema({
     },
     referrer: { 
         type: String, 
-        default: null 
+        default: null,
+        validate: {
+            validator: function(v) {
+                return v === null || /^[a-zA-Z0-9_-]+$/.test(v);
+            },
+            message: 'Invalid referrer ID format'
+        }
     },
     referrals: [{
         userId: String,
         joinDate: Date,
         earnings: { 
             type: Number, 
-            default: 0 
+            default: 0,
+            validate: {
+                validator: Number.isFinite,
+                message: 'Invalid earnings amount'
+            }
         }
     }],
-    lastDailyReward: { 
-        type: Date, 
-        default: null 
-    },
+    lastDailyReward: { type: Date, default: null },
     dailyRewardStreak: { 
         type: Number, 
-        default: 0 
+        default: 0,
+        validate: {
+            validator: Number.isInteger,
+            message: 'Streak must be an integer'
+        }
     },
     slimeNinjaAttempts: { 
         type: Number, 
-        default: 5 
+        default: 5,
+        validate: {
+            validator: Number.isInteger,
+            message: 'Attempts must be an integer'
+        }
     },
     totalDailyStreak: { 
         type: Number, 
-        default: 0 
+        default: 0,
+        validate: {
+            validator: Number.isInteger,
+            message: 'Total streak must be an integer'
+        }
     }
 });
-
 const User = mongoose.model('User', UserSchema);
 
 // Подключение к MongoDB с улучшенными настройками безопасности
@@ -119,11 +192,13 @@ mongoose.connect(process.env.MONGODB_URI, {
     ssl: true,
     authSource: 'admin',
     retryWrites: true,
-    w: 'majority'
-})
-.then(() => console.log('Connected to MongoDB'))
-.catch(err => console.error('MongoDB connection error:', err));
-// Базовые маршруты с проверкой здоровья системы
+    w: 'majority',
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 45000,
+}).then(() => console.log('Connected to MongoDB'))
+  .catch(err => console.error('MongoDB connection error:', err));
+
+// Базовые маршруты
 app.get('/', (req, res) => {
     res.send('Backend is running');
 });
@@ -134,85 +209,100 @@ app.get('/health', (req, res) => {
         timestamp: new Date(),
         port: process.env.PORT,
         mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-        security: 'enabled'
+        security: 'enabled',
+        version: process.env.APP_VERSION || '1.0.0'
     });
 });
 
-// Защищённый endpoint получения данных пользователя
-app.get('/api/users/:userId', 
-    authMiddleware,
-    async (req, res) => {
-        try {
-            return await TransactionManager.executeInTransaction(async (session) => {
-                let user = await User.findOne({ userId: req.params.userId }).session(session);
+// Получение данных пользователя
+app.get('/api/users/:userId', authMiddleware, async (req, res) => {
+    try {
+        const sanitizedUserId = SecurityService.sanitizeInput(req.params.userId);
+        
+        return await TransactionManager.executeInTransaction(async (session) => {
+            let user = await User.findOne({ userId: sanitizedUserId }).session(session);
+
+            if (!user) {
+                const referralCode = await SecurityService.generateSecureToken();
+                const encryptedReferralCode = SecurityService.encrypt(referralCode);
                 
-                if (!user) {
-                    const referralCode = await SecurityService.generateSecureReferralCode();
-                    const encryptedReferralCode = SecurityService.encrypt(referralCode);
-                    
-                    user = await User.create([{
-                        userId: req.params.userId,
-                        limeAmount: 0,
-                        encryptedData: {
-                            referralCode: encryptedReferralCode
-                        }
-                    }], { session });
-                }
-
-                if (user.isActive && user.startTime) {
-                    const now = Date.now();
-                    const startTime = new Date(user.startTime).getTime();
-                    const elapsedTime = now - startTime;
-                    const farmingDuration = 30 * 1000;
-                    const baseAmount = user.limeAmount;
-                    const totalReward = 70;
-
-                    if (elapsedTime >= farmingDuration) {
-                        user.limeAmount = baseAmount + totalReward;
-                        user.xp += totalReward * 0.1;
-                        user.isActive = false;
-                        user.startTime = null;
-                        await user.save({ session });
-                    } else {
-                        const progress = (elapsedTime / farmingDuration) * 100;
-                        const currentEarned = (totalReward * elapsedTime) / farmingDuration;
-                        const currentXpEarned = currentEarned * 0.1;
-
-                        return res.json({
-                            ...user.toObject(),
-                            currentProgress: {
-                                progress,
-                                currentLimeAmount: baseAmount + currentEarned,
-                                currentXp: user.xp + currentXpEarned,
-                                remainingTime: Math.ceil((farmingDuration - elapsedTime) / 1000)
-                            }
-                        });
+                user = await User.create([{
+                    userId: sanitizedUserId,
+                    limeAmount: 0,
+                    encryptedData: {
+                        referralCode: encryptedReferralCode
                     }
+                }], { session });
+            }
+
+            if (user.isActive && user.startTime) {
+                const now = Date.now();
+                const startTime = new Date(user.startTime).getTime();
+                const elapsedTime = now - startTime;
+                const farmingDuration = 30 * 1000;
+                const baseAmount = user.limeAmount;
+                const totalReward = 70;
+
+                if (elapsedTime >= farmingDuration) {
+                    user.limeAmount = baseAmount + totalReward;
+                    user.xp += totalReward * 0.1;
+                    user.isActive = false;
+                    user.startTime = null;
+                    user.farmingCount += 1;
+
+                    // Проверка достижений
+                    if (user.farmingCount === 1) {
+                        user.achievements.firstFarm = true;
+                    }
+                    if (user.limeAmount >= 1000000) {
+                        user.achievements.millionaire = true;
+                    }
+
+                    await user.save({ session });
+                } else {
+                    const progress = (elapsedTime / farmingDuration) * 100;
+                    const currentEarned = (totalReward * elapsedTime) / farmingDuration;
+                    const currentXpEarned = currentEarned * 0.1;
+                    
+                    return res.json({
+                        ...user.toObject(),
+                        currentProgress: {
+                            progress,
+                            currentLimeAmount: baseAmount + currentEarned,
+                            currentXp: user.xp + currentXpEarned,
+                            remainingTime: Math.ceil((farmingDuration - elapsedTime) / 1000)
+                        }
+                    });
                 }
+            }
 
-                const decryptedUser = await DataService.decryptUserData(user);
-                res.json(decryptedUser);
-            });
-        } catch (error) {
-            console.error('Error:', error);
-            res.status(500).json({ error: 'Internal server error' });
-        }
+            const decryptedUser = await DataService.decryptData(user, ['referralCode', 'achievements']);
+            res.json(decryptedUser);
+        });
+    } catch (error) {
+        console.error('Error:', error);
+        res.status(500).json({ 
+            error: process.env.NODE_ENV === 'production' 
+                ? 'Internal server error' 
+                : error.message 
+        });
     }
-);
-
-// Защищённый endpoint начала фарминга
+});
+// Начало фарминга
 app.post('/api/users/:userId/start-farming',
     authMiddleware,
     validateRequest(schemas.farming),
     async (req, res) => {
         try {
+            const sanitizedUserId = SecurityService.sanitizeInput(req.params.userId);
+            
             const result = await TransactionManager.executeInTransaction(async (session) => {
-                const user = await User.findOne({ userId: req.params.userId }).session(session);
+                const user = await User.findOne({ userId: sanitizedUserId }).session(session);
                 
                 if (!user) {
                     throw new Error('User not found');
                 }
-
+                
                 if (user.isActive) {
                     throw new Error('Farming already in progress');
                 }
@@ -221,26 +311,30 @@ app.post('/api/users/:userId/start-farming',
                 user.startTime = new Date();
                 await user.save({ session });
 
-                // Логирование действия
-                await SecurityService.logUserAction(user.userId, 'start_farming', { timestamp: new Date() });
+                await SecurityService.logUserAction(user.userId, 'start_farming', {
+                    timestamp: new Date(),
+                    previousLimeAmount: user.limeAmount
+                });
 
                 return user;
             });
 
             res.json(result);
         } catch (error) {
-            res.status(500).json({ error: error.message });
+            res.status(400).json({ error: error.message });
         }
     }
 );
 
-// Защищённый endpoint ежедневной награды
+// Ежедневная награда
 app.post('/api/users/:userId/daily-reward',
     authMiddleware,
     async (req, res) => {
         try {
+            const sanitizedUserId = SecurityService.sanitizeInput(req.params.userId);
+            
             const result = await TransactionManager.executeInTransaction(async (session) => {
-                const user = await User.findOne({ userId: req.params.userId }).session(session);
+                const user = await User.findOne({ userId: sanitizedUserId }).session(session);
                 
                 if (!user) {
                     throw new Error('User not found');
@@ -276,6 +370,12 @@ app.post('/api/users/:userId/daily-reward',
 
                 await user.save({ session });
 
+                await SecurityService.logUserAction(user.userId, 'daily_reward_claimed', {
+                    timestamp: now,
+                    streak: user.dailyRewardStreak,
+                    reward: limeReward
+                });
+
                 return {
                     streak: user.dailyRewardStreak,
                     rewardDay: rewardDay,
@@ -288,24 +388,25 @@ app.post('/api/users/:userId/daily-reward',
 
             res.json(result);
         } catch (error) {
-            res.status(500).json({ error: error.message });
+            res.status(400).json({ error: error.message });
         }
     }
 );
-// Защищённый endpoint обновления данных пользователя
+// Обновление данных пользователя
 app.put('/api/users/:userId',
     authMiddleware,
     validateRequest(schemas.user),
     async (req, res) => {
         try {
+            const sanitizedUserId = SecurityService.sanitizeInput(req.params.userId);
+            
             const result = await TransactionManager.executeInTransaction(async (session) => {
-                const user = await User.findOne({ userId: req.params.userId }).session(session);
+                const user = await User.findOne({ userId: sanitizedUserId }).session(session);
                 
                 if (!user) {
                     throw new Error('User not found');
                 }
 
-                // Шифрование чувствительных данных
                 if (req.body.achievements) {
                     const encryptedAchievements = SecurityService.encrypt(
                         JSON.stringify(req.body.achievements)
@@ -313,79 +414,113 @@ app.put('/api/users/:userId',
                     user.encryptedData.achievements = encryptedAchievements;
                 }
 
-                // Безопасное обновление обычных полей
                 const allowedFields = ['limeAmount', 'level', 'xp', 'slimeNinjaAttempts'];
+                const updates = {};
+
                 allowedFields.forEach(field => {
                     if (req.body[field] !== undefined) {
-                        user[field] = req.body[field];
+                        updates[field] = SecurityService.sanitizeInput(req.body[field]);
                     }
                 });
 
+                // Проверка валидности обновлений
+                if (updates.limeAmount !== undefined && updates.limeAmount < 0) {
+                    throw new Error('Invalid lime amount');
+                }
+                if (updates.level !== undefined && updates.level < 1) {
+                    throw new Error('Invalid level value');
+                }
+                if (updates.xp !== undefined && updates.xp < 0) {
+                    throw new Error('Invalid XP value');
+                }
+                if (updates.slimeNinjaAttempts !== undefined && 
+                    (updates.slimeNinjaAttempts < 0 || updates.slimeNinjaAttempts > 100)) {
+                    throw new Error('Invalid attempts value');
+                }
+
+                Object.assign(user, updates);
                 user.lastUpdate = new Date();
+
                 await user.save({ session });
 
-                // Логирование обновления
                 await SecurityService.logUserAction(user.userId, 'update_data', {
-                    fields: Object.keys(req.body),
+                    fields: Object.keys(updates),
                     timestamp: new Date()
                 });
 
-                return await DataService.decryptUserData(user);
+                return await DataService.decryptData(user, ['referralCode', 'achievements']);
             });
 
             res.json(result);
         } catch (error) {
-            res.status(500).json({ error: error.message });
+            res.status(400).json({ error: error.message });
         }
     }
 );
 
-// Защищённый endpoint обновления попыток
+// Обновление попыток
 app.post('/api/users/:userId/update-attempts',
     authMiddleware,
     validateRequest(schemas.user),
     async (req, res) => {
         try {
+            const sanitizedUserId = SecurityService.sanitizeInput(req.params.userId);
+            const sanitizedAttempts = parseInt(SecurityService.sanitizeInput(req.body.attempts));
+
+            if (isNaN(sanitizedAttempts) || sanitizedAttempts < 0 || sanitizedAttempts > 100) {
+                throw new Error('Invalid attempts value');
+            }
+
             const result = await TransactionManager.executeInTransaction(async (session) => {
-                const user = await User.findOne({ userId: req.params.userId }).session(session);
+                const user = await User.findOne({ userId: sanitizedUserId }).session(session);
                 
                 if (!user) {
                     throw new Error('User not found');
                 }
 
-                // Атомарное обновление попыток
                 const updatedUser = await User.findOneAndUpdate(
-                    { userId: req.params.userId },
-                    { $set: { slimeNinjaAttempts: req.body.attempts } },
+                    { userId: sanitizedUserId },
                     { 
+                        $set: { 
+                            slimeNinjaAttempts: sanitizedAttempts,
+                            lastUpdate: new Date()
+                        } 
+                    },
+                    {
                         new: true,
                         session,
                         runValidators: true
                     }
                 );
 
+                await SecurityService.logUserAction(sanitizedUserId, 'update_attempts', {
+                    oldValue: user.slimeNinjaAttempts,
+                    newValue: sanitizedAttempts,
+                    timestamp: new Date()
+                });
+
                 return updatedUser;
             });
 
             res.json({ attempts: result.slimeNinjaAttempts });
         } catch (error) {
-            res.status(500).json({ error: error.message });
+            res.status(400).json({ error: error.message });
         }
     }
 );
-
-// Защищённый endpoint реферальной системы
+// Получение информации о рефералах
 app.get('/api/users/:userId/referrals',
     authMiddleware,
     async (req, res) => {
         try {
-            const user = await User.findOne({ userId: req.params.userId });
+            const sanitizedUserId = SecurityService.sanitizeInput(req.params.userId);
+
+            const user = await User.findOne({ userId: sanitizedUserId });
             
             if (!user) {
                 throw new Error('User not found');
             }
 
-            // Расшифровка реферального кода
             const decryptedReferralCode = user.encryptedData.referralCode 
                 ? SecurityService.decrypt(user.encryptedData.referralCode)
                 : null;
@@ -403,31 +538,33 @@ app.get('/api/users/:userId/referrals',
 
             res.json(referralData);
         } catch (error) {
-            res.status(500).json({ error: error.message });
+            res.status(400).json({ error: error.message });
         }
     }
 );
 
-// Защищённый endpoint для реферальной системы
+// Использование реферального кода
 app.post('/api/users/referral',
     authMiddleware,
     validateRequest(schemas.referral),
     async (req, res) => {
         try {
-            await TransactionManager.executeInTransaction(async (session) => {
-                const { referralCode, userId } = req.body;
+            const sanitizedReferralCode = SecurityService.sanitizeInput(req.body.referralCode);
+            const sanitizedUserId = SecurityService.sanitizeInput(req.body.userId);
 
+            await TransactionManager.executeInTransaction(async (session) => {
                 // Поиск реферера по зашифрованному коду
                 const referrer = await User.findOne({
-                    'encryptedData.referralCode.encryptedData': SecurityService.encrypt(referralCode).encryptedData
+                    'encryptedData.referralCode.encryptedData': 
+                        SecurityService.encrypt(sanitizedReferralCode).encryptedData
                 }).session(session);
 
                 if (!referrer) {
                     throw new Error('Invalid referral code');
                 }
 
-                const user = await User.findOne({ userId }).session(session);
-
+                const user = await User.findOne({ userId: sanitizedUserId }).session(session);
+                
                 if (!user) {
                     throw new Error('User not found');
                 }
@@ -436,9 +573,13 @@ app.post('/api/users/referral',
                     throw new Error('User already has a referrer');
                 }
 
-                // Безопасное обновление реферальных данных
+                if (user.userId === referrer.userId) {
+                    throw new Error('Cannot use own referral code');
+                }
+
+                // Добавление реферала
                 referrer.referrals.push({
-                    userId: userId,
+                    userId: sanitizedUserId,
                     joinDate: new Date(),
                     earnings: 0
                 });
@@ -450,8 +591,7 @@ app.post('/api/users/referral',
                     user.save({ session })
                 ]);
 
-                // Логирование реферальной операции
-                await SecurityService.logUserAction(userId, 'referral_used', {
+                await SecurityService.logUserAction(sanitizedUserId, 'referral_used', {
                     referrerId: referrer.userId,
                     timestamp: new Date()
                 });
@@ -459,16 +599,15 @@ app.post('/api/users/referral',
 
             res.json({ success: true });
         } catch (error) {
-            res.status(500).json({ error: error.message });
+            res.status(400).json({ error: error.message });
         }
     }
 );
 
-// Обработка ошибок
+// Обработчик ошибок
 app.use((err, req, res, next) => {
     console.error('Error:', err);
     
-    // Безопасная обработка ошибок
     const safeError = {
         message: process.env.NODE_ENV === 'production' 
             ? 'Internal Server Error' 
@@ -477,13 +616,19 @@ app.use((err, req, res, next) => {
         code: err.code || 'INTERNAL_ERROR'
     };
 
-    // Логирование ошибки
     SecurityService.logError({
-        error: err,
+        error: {
+            message: err.message,
+            stack: err.stack,
+            code: err.code
+        },
         request: {
             method: req.method,
             path: req.path,
-            headers: req.headers,
+            headers: {
+                ...req.headers,
+                authorization: undefined // Не логируем чувствительные данные
+            },
             body: req.body
         },
         timestamp: new Date()
@@ -491,25 +636,32 @@ app.use((err, req, res, next) => {
 
     res.status(safeError.status).json(safeError);
 });
-
-// Настройка безопасного завершения работы
+// Graceful Shutdown
 const gracefulShutdown = async (signal) => {
     console.log(`${signal} received`);
     
+    // Установка таймаута для принудительного завершения
+    const shutdownTimeout = setTimeout(() => {
+        console.error('Forced shutdown due to timeout');
+        process.exit(1);
+    }, 10000);
+
     try {
-        // Завершение всех активных транзакций
+        // Закрытие всех активных транзакций
         await TransactionManager.closeAllTransactions();
         
-        // Закрытие соединения с базой данных
+        // Закрытие соединения с MongoDB
         await mongoose.connection.close(false);
         
-        // Завершение работы сервера
+        // Закрытие HTTP-сервера
         server.close(() => {
-            console.log('Process terminated');
+            clearTimeout(shutdownTimeout);
+            console.log('Process terminated gracefully');
             process.exit(0);
         });
     } catch (error) {
         console.error('Error during shutdown:', error);
+        clearTimeout(shutdownTimeout);
         process.exit(1);
     }
 };
@@ -518,10 +670,27 @@ const gracefulShutdown = async (signal) => {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
+// Обработка необработанных исключений и отклонений промисов
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error);
+    gracefulShutdown('UNCAUGHT_EXCEPTION');
+});
+
 // Запуск сервера
 const PORT = process.env.PORT || 8000;
 const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server is running on port ${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV}`);
+    console.log(`MongoDB Status: ${mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected'}`);
+    console.log(`Security Measures: Enabled`);
 });
 
+// Настройка таймаута сервера
+server.timeout = 30000; // 30 секунд
+
+// Экспорт для тестирования
 module.exports = app;
